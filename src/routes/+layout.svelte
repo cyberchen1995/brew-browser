@@ -18,6 +18,7 @@
     ui.loadVibrancyMaterialFromStorage();
     ui.loadConfirmDestructiveFromStorage();
     ui.loadActivitySettingsFromStorage();
+    ui.loadSidebarCollapsedFromStorage();
     activity.hydrate();
     // Phase 12d — hydrate the persisted settings.json into the renderer
     // so the Network section, the Catalog stale banner, and the cask

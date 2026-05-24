@@ -107,8 +107,9 @@
 </script>
 
 <section class="services">
+  <!-- Pane title ("Services") moved to the window title bar; head keeps
+       the running/total count and Refresh. -->
   <header class="panel-head" data-tauri-drag-region>
-    <h1>Services</h1>
     <div class="head-right" data-tauri-drag-region="false">
       <span class="text-muted count">
         {#if services.list.length > 0}
@@ -153,9 +154,15 @@
         {#each sorted as s (s.name)}
           {@const ns = normalizeServiceStatus(s.status)}
           {@const isPending = services.isPending(s.name)}
+          {@const isSelected = ui.selectedPackage?.name === s.name && ui.selectedPackage?.kind === "formula"}
           <li>
-            <div class="row" class:pending={isPending}>
-              <button class="name truncate" onclick={() => openPackage(s.name)} title={`Open ${s.name} in detail`}>
+            <div class="row" class:pending={isPending} class:selected={isSelected}>
+              <button
+                class="name truncate"
+                aria-current={isSelected ? "true" : undefined}
+                onclick={() => openPackage(s.name)}
+                title={`Open ${s.name} in detail`}
+              >
                 {s.name}
               </button>
               <span class="status">
@@ -203,19 +210,18 @@
   .services { display: flex; flex-direction: column; min-height: 0; height: 100%; }
   .panel-head {
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-end;
     align-items: center;
     padding: var(--space-4);
     border-bottom: 1px solid var(--color-border);
     gap: var(--space-3);
   }
-  .head-right { display: flex; align-items: center; gap: var(--space-3); }
+  .head-right { display: flex; align-items: center; gap: var(--space-3); margin-left: auto; }
   .count { font-size: var(--text-body-sm); white-space: nowrap; }
 
   /* Narrow-window responsive: same pattern as Trending + Library. Drop the
      "N running · M total" count and the Refresh button when the head-right
-     cluster crowds the TopBar's reserved 96 px on the right. Cmd+R still
-     refreshes the services list. */
+     cluster crowds the panel. Cmd+R still refreshes the services list. */
   @media (max-width: 1000px) {
     .count { display: none; }
     .refresh-wrap { display: none; }
@@ -253,6 +259,12 @@
   }
   .row.pending { opacity: 0.6; }
   .row:hover { background: var(--color-surface-sunken); }
+  .row.selected {
+    background: var(--color-selection-strong);
+    color: var(--color-text-inverse);
+  }
+  .row.selected .name,
+  .row.selected .user { color: inherit; }
   .name {
     font-weight: var(--fw-medium);
     color: var(--color-text-primary);

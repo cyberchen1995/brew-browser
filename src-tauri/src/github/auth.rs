@@ -82,7 +82,7 @@ pub const KEYCHAIN_ACCOUNT_USERNAME: &str = "github_username";
 /// found" error on the first sign-in attempt; failing loudly is
 /// preferred to falling back to a default that could leak Device-Flow
 /// requests onto someone else's GitHub App.
-pub const GITHUB_OAUTH_CLIENT_ID: &str = "Iv1.PLACEHOLDER_REPLACE_BEFORE_RELEASE";
+pub const GITHUB_OAUTH_CLIENT_ID: &str = "Ov23liJZKbvrSBuiOPkT";
 
 /// OAuth scopes we request at sign-in. **Keep this minimum** — any
 /// addition needs explicit review per §12e's "scope minimum" gate.

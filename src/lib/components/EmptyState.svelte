@@ -21,6 +21,10 @@
 </div>
 
 <style>
+  /* Fill the available vertical space of the surrounding scroll wrap so
+     the empty-state content reads as the centerpiece of the pane rather
+     than a small block hugging the top. The flex column + justify/align
+     center handle the actual centering once the box has height. */
   .empty {
     display: flex;
     flex-direction: column;
@@ -29,8 +33,10 @@
     text-align: center;
     max-width: 360px;
     margin: 0 auto;
-    padding: var(--space-12) var(--space-6);
+    padding: var(--space-6);
     gap: var(--space-4);
+    min-height: 100%;
+    box-sizing: border-box;
   }
   .ico {
     color: var(--color-text-muted);

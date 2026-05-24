@@ -135,8 +135,9 @@
 </script>
 
 <section class="snapshots">
+  <!-- Pane title ("Snapshots") moved to the window title bar; head
+       keeps the Import + New Snapshot primary actions. -->
   <header class="panel-head" data-tauri-drag-region>
-    <h1>Snapshots</h1>
     <div class="head-right" data-tauri-drag-region="false">
       <Button size="md" variant="secondary" onclick={doImport}>
         {#snippet icon()}<Upload size={14} />{/snippet}
@@ -158,18 +159,14 @@
         {#snippet cta()}<Button variant="secondary" onclick={() => brewfiles.load()}>Retry</Button>{/snippet}
       </EmptyState>
     {:else if brewfiles.list.length === 0}
+      <!-- Inline CTAs intentionally omitted: the same actions live in
+           the panel-head's top-right (Import… + New Snapshot), so the
+           empty state stays purely informational. -->
       <EmptyState
         title="No snapshots yet."
         body="Save your current setup so you can restore it on another Mac. Snapshots live in ~/Library/Application Support/brew-browser/brewfiles/ — findable outside the app too."
       >
         {#snippet icon()}<Archive size={48} />{/snippet}
-        {#snippet cta()}
-          <Button variant="primary" onclick={openNew}>
-            {#snippet icon()}<Plus size={14} />{/snippet}
-            New Snapshot
-          </Button>
-          <Button variant="secondary" onclick={doImport}>Import Brewfile…</Button>
-        {/snippet}
       </EmptyState>
     {:else}
       <ul class="cards">
@@ -241,12 +238,12 @@
 <style>
   .snapshots { display: flex; flex-direction: column; min-height: 0; height: 100%; }
   .panel-head {
-    display: flex; justify-content: space-between; align-items: center;
+    display: flex; justify-content: flex-end; align-items: center;
     padding: var(--space-4);
     border-bottom: 1px solid var(--color-border);
     gap: var(--space-3);
   }
-  .head-right { display: flex; align-items: center; gap: var(--space-2); }
+  .head-right { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
   .list-wrap { flex: 1; overflow-y: auto; min-height: 0; padding: var(--space-4); }
   .cards { display: flex; flex-direction: column; gap: var(--space-3); }
   .card {

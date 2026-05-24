@@ -659,6 +659,17 @@ export type SidebarSection =
 
 export type ThemePreference = "light" | "dark" | "system";
 
+/** Settings modal subsection. Kept in sync with Settings.svelte's
+    internal section list — use this when deep-linking via
+    `ui.openSettings(section)`. */
+export type SettingsSection =
+  | "appearance"
+  | "network"
+  | "github"
+  | "brew"
+  | "activity"
+  | "about";
+
 /** A job tracked locally on the frontend (status + accumulated lines). */
 export interface ActivityJob {
   jobId: string;

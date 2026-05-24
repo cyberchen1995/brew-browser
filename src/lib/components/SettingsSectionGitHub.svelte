@@ -55,13 +55,6 @@
 <div class="section">
   <h2>GitHub</h2>
 
-  <p class="lead">
-    Show repo stars, forks, and last release for any package whose
-    homepage is a GitHub URL. Anonymous probes are limited to
-    <strong>60 requests/hour per IP</strong>; signed-in lifts the
-    limit to <strong>5,000/hour</strong>.
-  </p>
-
   <!-- Stats opt-in toggle -->
   <div class="field">
     <label class="toggle">
@@ -75,8 +68,9 @@
       <span class="toggle-label">Show GitHub stats on package pages</span>
     </label>
     <p class="hint">
-      Off by default. When on, brew-browser fetches public repo metadata
-      from <code>api.github.com</code> for packages with a GitHub homepage.
+      Show repo stars, forks, and last release for any package whose
+      homepage is a GitHub URL. brew-browser fetches public repo metadata
+      from <code>api.github.com</code>.
     </p>
   </div>
 
@@ -110,7 +104,8 @@
       </button>
       <p class="hint">
         Opens GitHub's standard "Authorize app" flow in your browser. No
-        password is ever entered into brew-browser.
+        password is ever entered into brew-browser. This is required to Star,
+        Watch, and file issues on GitHub with brew-browser.
       </p>
     {/if}
   </div>
@@ -121,10 +116,6 @@
       <GitFork size={16} />
       <strong>What sign-in is used for</strong>
     </div>
-    <ul>
-      <li>Lifting the GitHub API rate limit (60 → 5,000 / hour).</li>
-      <li>Future: starring repos, filing issues, watching releases.</li>
-    </ul>
     <p class="privacy-body">
       brew-browser stores your token in the macOS Keychain. The token is
       <strong>never</strong> sent over IPC to the renderer,

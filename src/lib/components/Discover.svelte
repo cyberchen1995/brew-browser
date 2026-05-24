@@ -121,9 +121,9 @@
 </script>
 
 <section class="discover">
-  <header class="panel-head" data-tauri-drag-region>
-    <h1>Discover</h1>
-  </header>
+  <!-- Pane title moved to the window title bar (+page.svelte).
+       Discover has no secondary header actions, so the panel-head
+       is dropped entirely. -->
 
   <!-- Phase 12a: stale-catalog banner. Sits above the search bar so it
        reads as a section-level nudge, not a search affordance. Session-
@@ -228,8 +228,14 @@
       <ul class="list" aria-label="Search results">
         {#each allHits as h (h.name + h.kind)}
           {@const installed = h.installed || packages.isInstalled(h.name, h.kind)}
+          {@const isSelected = ui.selectedPackage?.name === h.name && ui.selectedPackage?.kind === h.kind}
           <li>
-            <button class="row row--with-desc" onclick={() => openHit(h)}>
+            <button
+              class="row row--with-desc"
+              class:selected={isSelected}
+              aria-current={isSelected ? "true" : undefined}
+              onclick={() => openHit(h)}
+            >
               <span class="name truncate">
                 <span class="name-text">{h.name}</span>
                 {#if friendlyOf(h.name)}
@@ -260,8 +266,14 @@
         <ul class="list" aria-label={`Packages in ${browseTitle}`}>
           {#each browseItems as h (h.name + h.kind)}
             {@const installed = packages.isInstalled(h.name, h.kind)}
+            {@const isSelected = ui.selectedPackage?.name === h.name && ui.selectedPackage?.kind === h.kind}
             <li>
-              <button class="row row--no-desc" onclick={() => openHit(h)}>
+              <button
+                class="row row--no-desc"
+                class:selected={isSelected}
+                aria-current={isSelected ? "true" : undefined}
+                onclick={() => openHit(h)}
+              >
                 <span class="name truncate">
                   <span class="name-text">{h.name}</span>
                   {#if friendlyOf(h.name)}
@@ -324,10 +336,6 @@
 
 <style>
   .discover { display: flex; flex-direction: column; min-height: 0; height: 100%; }
-  .panel-head {
-    display: flex; align-items: center; padding: var(--space-4);
-    border-bottom: 1px solid var(--color-border);
-  }
 
   /* ── Phase 12a — stale-catalog banner ─────────────────── */
   .stale-banner {
@@ -480,6 +488,12 @@
   .row--with-desc { grid-template-columns: minmax(0, 1fr) 80px minmax(0, 2fr) 90px; }
   .row--no-desc   { grid-template-columns: minmax(0, 1fr) 80px 90px; }
   .row:hover { background: var(--color-surface-sunken); }
+  .row.selected {
+    background: var(--color-selection-strong);
+    color: var(--color-text-inverse);
+  }
+  .row.selected .desc,
+  .row.selected .friendly-subtitle { color: var(--color-text-inverse); opacity: 0.85; }
   /* Switch to a vertical flex container so the optional friendly-name
      subtitle (Phase 13) stacks below the raw name. Both children are
      individually truncated; the parent's truncate utility class still

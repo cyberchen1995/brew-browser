@@ -25,17 +25,19 @@
 </script>
 
 <section class="hist">
-  <header class="panel-head" data-tauri-drag-region>
-    <h1>Activity</h1>
-    {#if activity.jobs.length > 0}
-      <span class="action-wrap">
+  <!-- Pane title ("Activity") moved to the window title bar. The
+       header is only rendered when there's a Clear-completed action
+       to surface; otherwise we skip the band entirely. -->
+  {#if activity.jobs.length > 0}
+    <header class="panel-head" data-tauri-drag-region>
+      <span class="action-wrap" data-tauri-drag-region="false">
         <Button size="sm" variant="ghost" onclick={() => activity.clearCompleted()}>
           {#snippet icon()}<Trash2 size={14} />{/snippet}
           Clear completed
         </Button>
       </span>
-    {/if}
-  </header>
+    </header>
+  {/if}
 
   <div class="list-wrap">
     {#if activity.jobs.length === 0}
@@ -70,15 +72,14 @@
 <style>
   .hist { display: flex; flex-direction: column; min-height: 0; height: 100%; }
   .panel-head {
-    display: flex; justify-content: space-between; align-items: center;
+    display: flex; justify-content: flex-end; align-items: center;
     padding: var(--space-4);
     border-bottom: 1px solid var(--color-border);
   }
 
   /* Narrow-window responsive: same pattern as Trending + Library + Services.
-     Drop the "Clear completed" action when the panel-head crowds the
-     TopBar's reserved 96 px on the right. The action stays available by
-     clearing individual jobs from the rows themselves. */
+     Drop the "Clear completed" action at narrow widths. The action stays
+     available by clearing individual jobs from the rows themselves. */
   @media (max-width: 1000px) {
     .action-wrap { display: none; }
   }

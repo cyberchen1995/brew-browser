@@ -104,9 +104,10 @@
 </script>
 
 <section class="library">
+  <!-- Pane title ("Library") moved to the window title bar; the head
+       keeps the install count + filter input + Refresh button. -->
   <header class="panel-head" data-tauri-drag-region>
     <div class="head-left">
-      <h1>Library</h1>
       <span class="count text-muted">{packages.all.length} installed</span>
     </div>
     <div class="head-right" data-tauri-drag-region="false">
@@ -241,9 +242,9 @@
   .head-right { display: flex; align-items: center; gap: var(--space-2); }
 
   /* Narrow-window responsive: drop the Refresh button when the head-right
-     cluster starts to crowd the TopBar's reserved 96 px on the right. The
-     Filter input is the primary control here so it stays; Refresh remains
-     available via Cmd+R. */
+     cluster starts to crowd the panel (typically when the detail panel is
+     open + the window is narrow). The Filter input is the primary control
+     here so it stays; Refresh remains available via Cmd+R. */
   @media (max-width: 1000px) {
     .refresh-wrap { display: none; }
   }
@@ -256,8 +257,8 @@
     flex-direction: column;
     gap: var(--space-2);
   }
-  /* Matches the TopBar (theme + Settings) group pattern: sunken
-     background, no border, raised + shadow active state. */
+  /* Sidebar theme-group pattern: sunken background, no border,
+     raised + shadow active state. */
   .pillgroup {
     display: inline-flex;
     background: var(--color-surface-sunken);

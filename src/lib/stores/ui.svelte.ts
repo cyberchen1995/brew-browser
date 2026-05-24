@@ -3,7 +3,8 @@
  * Uses Svelte 5 runes inside a module-scope class instance.
  */
 
-import type { SidebarSection, ThemePreference } from "$lib/types";
+import { discover } from "./discover.svelte";
+import type { SettingsSection, SidebarSection, ThemePreference } from "$lib/types";
 
 /** Default width of the package detail pane in pixels — the original fixed width. */
 export const DETAIL_PANE_DEFAULT_WIDTH = 420;
@@ -18,6 +19,7 @@ const VIBRANCY_MATERIAL_KEY = "brew-browser:vibrancy-material";
 const CONFIRM_DESTRUCTIVE_KEY = "brew-browser:confirm-destructive";
 const ACTIVITY_MAX_JOBS_KEY = "brew-browser:activity:max-jobs";
 const ACTIVITY_MAX_LINES_KEY = "brew-browser:activity:max-lines";
+const SIDEBAR_COLLAPSED_KEY = "brew-browser:sidebar-collapsed";
 
 /** Defaults for the Activity-retention settings (Phase 12b). */
 export const ACTIVITY_MAX_JOBS_DEFAULT = 50;
@@ -61,15 +63,35 @@ export function clampDetailPaneWidth(w: number, windowWidth?: number): number {
   return Math.min(Math.max(Math.round(w), DETAIL_PANE_MIN_WIDTH), max);
 }
 
+/** Human-readable titles shown in the window title bar for each section.
+    Kept here (not in Sidebar) so the title bar can read them without
+    importing the navigation array. */
+const SECTION_TITLES: Record<SidebarSection, string> = {
+  dashboard: "Dashboard",
+  library:   "Library",
+  discover:  "Discover",
+  trending:  "Trending",
+  snapshots: "Snapshots",
+  services:  "Services",
+  activity:  "Activity",
+};
+
 class UiStore {
   /** First-launch landing. Dashboard is the home screen; clicking the sidebar
       brand returns here. Other sections live below it in the nav. */
   section: SidebarSection = $state("dashboard");
+
+  /** The active section's display name — shown in the window title bar
+      (the panel-head `<h1>` was removed in favour of the title bar). */
+  pageTitle = $derived(SECTION_TITLES[this.section]);
   drawerOpen: boolean = $state(false);
   drawerMinimized: boolean = $state(false);
   paletteOpen: boolean = $state(false);
   /** Settings modal (Phase 12b). Opened via the top-right gear icon or ⌘,. */
   settingsOpen: boolean = $state(false);
+  /** Optional initial section to land on when the modal opens. `null`
+      means "use the modal's default (Appearance)". Cleared by closeSettings. */
+  settingsInitialSection: SettingsSection | null = $state(null);
   /** About modal — native menu "About brew-browser" + sidebar footer link. */
   aboutOpen: boolean = $state(false);
   theme: ThemePreference = $state("system");
@@ -100,13 +122,27 @@ class UiStore {
   activityMaxJobs: number = $state(ACTIVITY_MAX_JOBS_DEFAULT);
   activityMaxLines: number = $state(ACTIVITY_MAX_LINES_DEFAULT);
 
+  /** When true, the sidebar collapses to an icon-only rail with native
+      tooltips on hover. Persisted to localStorage so the choice survives
+      app launches. */
+  sidebarCollapsed: boolean = $state(false);
+
   setSection(s: SidebarSection) {
+    const changed = s !== this.section;
     this.section = s;
     // Navigating to ANY section closes the package detail slide-over.
     // Without this, the detail panel persists across sidebar clicks /
     // brand-to-Dashboard / Cmd+0..6, which feels jarring — the user
     // clearly chose a new context; the lingering panel is from the old one.
     this.selectedPackage = null;
+    // Category chips are owned by Discover but borrowed by Library for
+    // the same kind of filter. The chip context shouldn't follow the
+    // user across panes — Discover's "Productivity" filter shouldn't
+    // silently filter Library to 0 packages on the next click. Reset
+    // on any real section change. Callers that deep-link to a section
+    // WITH a chip preselected (Dashboard's category donut, PackageDetail's
+    // category pills) must call setSection FIRST, then discover.selectOnly().
+    if (changed) discover.clear();
   }
 
   openDrawer() {
@@ -133,8 +169,14 @@ class UiStore {
   openPalette() { this.paletteOpen = true; }
   closePalette() { this.paletteOpen = false; }
 
-  openSettings() { this.settingsOpen = true; }
-  closeSettings() { this.settingsOpen = false; }
+  openSettings(section: SettingsSection | null = null) {
+    this.settingsInitialSection = section;
+    this.settingsOpen = true;
+  }
+  closeSettings() {
+    this.settingsOpen = false;
+    this.settingsInitialSection = null;
+  }
 
   openAbout() { this.aboutOpen = true; }
   closeAbout() { this.aboutOpen = false; }
@@ -225,6 +267,24 @@ class UiStore {
         const n = Number(l);
         this.activityMaxLines = clampInt(n, ACTIVITY_MAX_LINES_MIN, ACTIVITY_MAX_LINES_MAX, ACTIVITY_MAX_LINES_DEFAULT);
       }
+    } catch { /* ignore */ }
+  }
+
+  /** Toggle the sidebar between full-width and icon-only mode. Persists
+      to localStorage so the choice survives launches. */
+  toggleSidebarCollapsed() {
+    this.sidebarCollapsed = !this.sidebarCollapsed;
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, this.sidebarCollapsed ? "1" : "0");
+    } catch { /* ignore */ }
+  }
+
+  /** Restore the saved collapsed state on app start. Called once from
+      +layout.svelte after the DOM is available. */
+  loadSidebarCollapsedFromStorage() {
+    try {
+      const v = localStorage.getItem(SIDEBAR_COLLAPSED_KEY);
+      if (v !== null) this.sidebarCollapsed = v === "1";
     } catch { /* ignore */ }
   }
 

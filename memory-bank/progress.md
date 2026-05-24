@@ -412,3 +412,45 @@ The Technical Writer pass appended sections to:
 **Frontend modified (~15):** `src/app.css`, `src/lib/api.ts`, `src/lib/types.ts`, `src/lib/components/{Dashboard,Discover,Library,PackageDetail,PackageRow,Trending,Services,Sidebar,Settings,SettingsSectionBrew,DeviceFlowModal,ActivityHistory}.svelte`, `src/lib/stores/{ui,github}.svelte.ts`, `src/routes/{+layout,+page}.svelte`
 
 **Tools / docs:** `tools/enrich/enrich.py` (cascade .env)
+
+
+---
+
+## 2026-05-24 (v0.2.0 release)
+
+### Shipped
+
+- **Native macOS title bar** — unified 36 px chrome above the main split, traffic lights and toggle and page title all centered on one horizontal axis (`trafficLightPosition: { x: 14, y: 20 }`). Adaptive toggle position (inside sidebar's right edge when expanded; next to traffic lights when collapsed).
+- **Page title moved to title bar** — `ui.pageTitle` derived from `ui.section`. Every pane's `<h1>` was removed from its panel-head; panes with no remaining action content (Dashboard, Discover) lost their entire `<header>`. The others became thin secondary toolbars right-aligning their action clusters.
+- **Title-bar right cluster** — new `TitlebarControls.svelte` hosts theme dropdown (single icon → 3-item popover) + Settings gear + pink-filled Donate heart, grouped as one pill. Lighter `--color-surface` background (was the dark sunken). Right-edge aligns with the panel content's right padding.
+- **Sidebar refactor** — brand area gone; Dashboard is now the first nav item with `LayoutDashboard` icon. New persistent **type-ahead search input** at the top (no separator below it): debounced 300 ms → `brew_search`; dropdown of top 7 hits with kind pill + installed badge; ArrowUp/Down + Enter + Esc support; "See all results in Discover →" affordance. Hidden in collapsed mode.
+- **Collapsible sidebar** — `ui.sidebarCollapsed` state, persisted to localStorage. 200 → 56 px transition. Nav items become icon-only with a small badge overlay; theme/Settings/Donate hidden (they live in the title bar now); status row collapses to dot-only.
+- **(i) info popovers replace AI badges + "Wrong?" links** — new reusable `InfoButton.svelte`: hover-activated with open/close delays, focus-supported for keyboard a11y, `position: fixed` so it escapes ancestor `overflow:hidden`. Every "Wrong?" link and every "AI-enriched" sparkle badge gone from `PackageDetail.svelte`; replaced with a single (i) per cluster (Categories, Tags, Summary, Why install this?, Similar packages). Summary's (i) sits inline at the end of the text. Body text: *"Generated offline at build time by Claude Haiku 4.5 — no network or LLM calls happen while you use brew-browser. Open an issue if X looks off and we'll fix it in the next release."*
+- **Intercept-on-action GitHub flow** — static "Sign in via Settings → GitHub to star, watch, or file issues." paragraph removed. Star / Watch / File issue buttons always render when stats card is visible. Clicking while signed-out triggers `requireGithubSignIn(actionLabel)`: deep-links to Settings → GitHub via `ui.openSettings("github")` + toasts a hint. Intent-based discovery: the prompt only appears when the user actually wants to act.
+- **Settings deep-link plumbing** — `SettingsSection` type promoted to `types.ts`; `ui.openSettings(section?)` accepts an optional target section; `closeSettings()` clears it; `Settings.svelte` honors `ui.settingsInitialSection ?? "appearance"` on open.
+- **GitHub OAuth App live** — `GITHUB_OAUTH_CLIENT_ID = "Ov23liJZKbvrSBuiOPkT"` (Device Flow client_ids are RFC 8628-public; safe to commit). Sign-in no longer fails fast with "not configured."
+- **License-mismatch row wraps as prose** — whole sentence in one `<span>`, AlertCircle as a single non-shrinking flex child.
+- **EmptyState vertically centered** — every empty state across the app (Library, Discover, Snapshots, Trending, etc.) sits in the middle of its pane.
+- **Snapshots inline CTAs removed** — empty state is purely informational; the duplicate Import + New Snapshot buttons (already in the panel-head) are gone.
+- **Selected-row persistence** — Library, Trending, Discover (both row variants), Services, Dashboard outdated all bind `selected={…}` to `ui.selectedPackage` so the source row stays highlighted while the detail panel is open.
+- **Chip-filter clears on cross-pane navigation** — `ui.setSection()` calls `discover.clear()` when section actually changes; deeplink callers reordered to call setSection first then selectOnly.
+- **Native-square app icon (Tahoe-clean)** — `docs/icon/brew-browser.svg` re-authored as a full-bleed 181×181 square; all icon sizes regenerated via `npm run tauri icon`. Fixes the macOS Tahoe double-squircle artifact where the OS mask was exposing transparent corners.
+
+### Files this session
+
+**New (2):** `src/lib/components/InfoButton.svelte`, `src/lib/components/TitlebarControls.svelte`
+
+**Deleted (1):** `src/lib/components/TopBar.svelte` (folded into the new title bar + TitlebarControls split)
+
+**Backend modified:** `src-tauri/src/github/auth.rs` (live client_id), `src-tauri/tauri.conf.json` (version bump + trafficLightPosition)
+
+**Frontend modified:** `src/app.css`, `src/lib/types.ts`, `src/lib/stores/ui.svelte.ts`, `src/lib/components/{Dashboard,Discover,Library,Trending,Snapshots,Services,ActivityHistory,Sidebar,Settings,SettingsSectionGitHub,EmptyState,PackageDetail}.svelte`, `src/routes/{+layout,+page}.svelte`
+
+**Icons:** `src-tauri/icons/*` (all sizes regenerated), `docs/icon/brew-browser.{svg,af}`
+
+### Tests & lint
+
+- `cargo test`: **411 passed**, 0 failed, 6 ignored
+- `cargo clippy --all-targets -- -D warnings`: clean
+- `npm run check`: 0 errors
+- `npm run build`: clean

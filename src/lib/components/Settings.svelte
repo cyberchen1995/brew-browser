@@ -33,14 +33,7 @@
   import SettingsSectionBrew from "./SettingsSectionBrew.svelte";
   import SettingsSectionActivity from "./SettingsSectionActivity.svelte";
   import SettingsSectionAbout from "./SettingsSectionAbout.svelte";
-
-  type SettingsSection =
-    | "appearance"
-    | "network"
-    | "github"
-    | "brew"
-    | "activity"
-    | "about";
+  import type { SettingsSection } from "$lib/types";
 
   interface NavEntry {
     id: SettingsSection;
@@ -60,13 +53,14 @@
   let activeSection: SettingsSection = $state("appearance");
   let modalEl: HTMLDivElement | undefined = $state();
 
-  /** Reset the section pick whenever the modal is reopened, so the user
-      always lands on Appearance and doesn't carry over stale focus from
-      a previous open. Focus the first focusable inside the modal so the
-      user can immediately Tab through. */
+  /** Reset the section pick whenever the modal is reopened. Honors
+      `ui.settingsInitialSection` when the caller deep-linked
+      (e.g. PackageDetail intercepts a GitHub action while signed out);
+      otherwise lands on Appearance. Focus the first focusable inside
+      the modal so the user can immediately Tab through. */
   $effect(() => {
     if (ui.settingsOpen) {
-      activeSection = "appearance";
+      activeSection = ui.settingsInitialSection ?? "appearance";
       // Defer focus until DOM is updated.
       setTimeout(() => {
         if (!modalEl) return;

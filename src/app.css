@@ -44,9 +44,7 @@ html, body {
      - border-bottom (controls the separator y-position)
      - h1 typography (controls the title baseline)
    These are pinned here with `!important` to enforce cross-component
-   alignment. The right padding reserves 96 px for the TopBar's theme +
-   Settings group so per-panel Refresh / Filter / etc. don't slide under
-   it. ────────────────────────────────────────────────────────────────── */
+   alignment. ─────────────────────────────────────────────────────────── */
 .panel-head {
   display: flex !important;
   align-items: center !important;
@@ -61,15 +59,6 @@ html, body {
   font-weight: var(--fw-semibold) !important;
   line-height: 1.2 !important;
   margin: 0 !important;
-}
-/* The 96 px right-padding reserve for the TopBar (theme + Settings group)
-   applies ONLY to panel-heads inside the main `.content` area. The
-   PackageDetail slide-over has its own panel-head and the TopBar never
-   appears over it (TopBar is `position: absolute` inside `.content`), so
-   that header gets symmetric padding — the close X lives flush to the
-   right edge. */
-.content .panel-head {
-  padding-right: 96px !important;
 }
 
 /* Honor prefers-reduced-motion globally */

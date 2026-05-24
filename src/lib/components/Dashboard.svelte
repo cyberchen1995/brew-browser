@@ -285,8 +285,10 @@
       ui.setSection("discover");
       return;
     }
-    discover.selectOnly(slug);
+    // setSection FIRST: it clears chip filters on any real section change,
+    // so selectOnly must come after. See ui.setSection().
     ui.setSection("discover");
+    discover.selectOnly(slug);
   }
 
   /** First 5 outdated packages, sorted alphabetically for stable display. */
@@ -325,10 +327,9 @@
 </script>
 
 <section class="dashboard">
-  <header class="panel-head" data-tauri-drag-region>
-    <h1>Dashboard</h1>
-    <span class="text-muted hello">Your Homebrew at a glance.</span>
-  </header>
+  <!-- Pane title moved to the window title bar (+page.svelte).
+       Dashboard has no secondary header actions, so the panel-head
+       is dropped entirely. -->
 
   <div class="body">
     {#if packages.loading && !packages.list}
@@ -431,8 +432,14 @@
           </div>
           <ul class="outdated-list">
             {#each outdatedPreview as p (p.fullName + p.kind)}
+              {@const isSelected = ui.selectedPackage?.name === p.name && ui.selectedPackage?.kind === p.kind}
               <li>
-                <button class="outdated-row" onclick={() => openPackage(p.name, p.kind)}>
+                <button
+                  class="outdated-row"
+                  class:selected={isSelected}
+                  aria-current={isSelected ? "true" : undefined}
+                  onclick={() => openPackage(p.name, p.kind)}
+                >
                   <span class="o-name truncate">{p.name}</span>
                   <span class="o-kind"><Pill tone={p.kind === "formula" ? "formula" : "cask"}>{p.kind}</Pill></span>
                   <span class="o-version mono text-muted">
@@ -642,14 +649,6 @@
 
 <style>
   .dashboard { display: flex; flex-direction: column; min-height: 0; height: 100%; }
-  .panel-head {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-3);
-    padding: var(--space-4);
-    border-bottom: 1px solid var(--color-border);
-  }
-  .hello { font-size: var(--text-body-sm); }
 
   .body {
     flex: 1;
@@ -827,6 +826,11 @@
     transition: background 0.12s ease;
   }
   .outdated-row:hover { background: var(--color-surface-sunken); }
+  .outdated-row.selected {
+    background: var(--color-selection-strong);
+    color: var(--color-text-inverse);
+  }
+  .outdated-row.selected .o-version { color: inherit; }
   .outdated-list li:last-child .outdated-row { border-bottom: none; }
   .o-name { font-weight: var(--fw-medium); }
   .o-version { font-size: var(--text-body-sm); }

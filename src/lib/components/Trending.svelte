@@ -77,8 +77,9 @@
 </script>
 
 <section class="trending">
+  <!-- Pane title ("Trending") moved to the window title bar; head keeps
+       the time-window pills, last-updated label, and Refresh. -->
   <header class="panel-head" data-tauri-drag-region>
-    <h1>Trending</h1>
     <div class="head-right" data-tauri-drag-region="false">
       <div class="pillgroup" role="tablist" aria-label="Time window">
         {#each windows as w (w)}
@@ -118,8 +119,14 @@
       <ul class="list" aria-label="Trending packages">
         {#each sortedEntries as e (e.name + e.kind)}
           {@const installed = e.installedLocally || packages.isInstalled(e.name, e.kind)}
+          {@const isSelected = ui.selectedPackage?.name === e.name && ui.selectedPackage?.kind === e.kind}
           <li>
-            <button class="row" onclick={() => openEntry(e.name, e.kind)}>
+            <button
+              class="row"
+              class:selected={isSelected}
+              aria-current={isSelected ? "true" : undefined}
+              onclick={() => openEntry(e.name, e.kind)}
+            >
               <span class="rank">{e.rank}</span>
               <span class="name truncate">
                 <span class="name-text">{e.name}</span>
@@ -143,19 +150,18 @@
 <style>
   .trending { display: flex; flex-direction: column; min-height: 0; height: 100%; }
   .panel-head {
-    display: flex; justify-content: space-between; align-items: center;
+    display: flex; justify-content: flex-end; align-items: center;
     padding: var(--space-4);
     border-bottom: 1px solid var(--color-border);
     gap: var(--space-3);
   }
-  .head-right { display: flex; align-items: center; gap: var(--space-3); }
+  .head-right { display: flex; align-items: center; gap: var(--space-3); margin-left: auto; }
   .ago { font-size: var(--text-body-sm); white-space: nowrap; }
 
   /* Narrow-window responsive: drop the "Updated Ns ago" text and the
      Refresh button when the head-right cluster starts to crowd the
-     TopBar's reserved 96 px on the right. Refresh stays available via
-     Cmd+R. Threshold tuned for the default 1100×720 window minus a
-     reasonable user-resize. */
+     panel (typically when the detail panel is open + the window is
+     narrow). Refresh stays available via Cmd+R. */
   @media (max-width: 1000px) {
     .ago { display: none; }
     .refresh-wrap { display: none; }
@@ -183,8 +189,8 @@
     .row > :nth-child(4) { display: none; }
   }
 
-  /* Matches the TopBar (theme + Settings) group pattern: sunken
-     background, no border, raised + shadow active state. */
+  /* Sidebar theme-group pattern: sunken background, no border,
+     raised + shadow active state. */
   .pillgroup {
     display: inline-flex;
     background: var(--color-surface-sunken);
@@ -238,6 +244,16 @@
     border-bottom: 1px solid var(--color-border);
   }
   .row:hover { background: var(--color-surface-sunken); }
+  .row.selected {
+    background: var(--color-selection-strong);
+    color: var(--color-text-inverse);
+  }
+  .row.selected .rank,
+  .row.selected .count { color: inherit; }
+  .row.selected .friendly-subtitle {
+    color: var(--color-text-inverse);
+    opacity: 0.75;
+  }
   .rank { color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
   /* Vertical flex container so the optional AI-enriched friendly_name
      subtitle (Phase 13) stacks below the raw token. Children manage

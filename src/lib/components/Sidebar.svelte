@@ -5,7 +5,9 @@
   import Archive from "@lucide/svelte/icons/archive";
   import Activity from "@lucide/svelte/icons/activity";
   import Server from "@lucide/svelte/icons/server";
-  import Heart from "@lucide/svelte/icons/heart";
+  import LayoutDashboard from "@lucide/svelte/icons/layout-dashboard";
+  import SearchIcon from "@lucide/svelte/icons/search";
+  import XIcon from "@lucide/svelte/icons/x";
 
   import { ui } from "$lib/stores/ui.svelte";
   import { packages } from "$lib/stores/packages.svelte";
@@ -13,9 +15,9 @@
   import { brewfiles } from "$lib/stores/brewfiles.svelte";
   import { services } from "$lib/stores/services.svelte";
   import { env } from "$lib/stores/env.svelte";
-  import { normalizeServiceStatus } from "$lib/types";
-  import { safeOpenUrl } from "$lib/util/url";
-  import { SPONSOR_URL } from "$lib/util/donate";
+  import { search } from "$lib/stores/search.svelte";
+  import { normalizeServiceStatus, type PackageKind, type SearchHit } from "$lib/types";
+  import Pill from "./Pill.svelte";
   import type { SidebarSection } from "$lib/types";
 
   interface NavItem {
@@ -25,7 +27,11 @@
     icon: typeof Boxes;
   }
 
+  /** Dashboard is now a regular nav item (formerly the brand). Listed first
+      so ⌘0 maps to it and it gets the visual primacy without a dedicated
+      brand row eating sidebar space. */
   const nav: NavItem[] = [
+    { id: "dashboard", label: "Dashboard", shortcut: "⌘0", icon: LayoutDashboard },
     { id: "library",   label: "Library",   shortcut: "⌘1", icon: Boxes },
     { id: "discover",  label: "Discover",  shortcut: "⌘2", icon: Compass },
     { id: "trending",  label: "Trending",  shortcut: "⌘3", icon: TrendingUp },
@@ -33,6 +39,79 @@
     { id: "services",  label: "Services",  shortcut: "⌘5", icon: Server },
     { id: "activity",  label: "Activity",  shortcut: "⌘6", icon: Activity },
   ];
+
+  // ───────── Sidebar type-ahead search ─────────
+  // A persistent quick lookup that hits the same `brew search` index the
+  // Discover pane uses, but renders the top hits inline as the user types.
+  // Click → open detail panel. Enter → route to Discover with the query.
+  // Esc → clear.
+  let searchInput: HTMLInputElement | undefined = $state();
+  let searchFocused = $state(false);
+  let selectedIdx = $state(0);
+
+  /** Flatten formulae + casks, cap to a manageable number for the dropdown.
+      Sidebar real estate is tight; >7 results crowd the nav. */
+  const topHits = $derived.by<SearchHit[]>(() => {
+    const r = search.results;
+    if (!r) return [];
+    return [...r.formulae, ...r.casks].slice(0, 7);
+  });
+
+  /** Show the dropdown when the input has 2+ chars AND is focused (or
+      results are loading) AND we're not in collapsed mode (no room). */
+  const dropdownOpen = $derived(
+    !ui.sidebarCollapsed &&
+      searchFocused &&
+      search.query.length >= 2 &&
+      (search.loading || !!search.results || !!search.error),
+  );
+
+  function onSearchInput(e: Event) {
+    const v = (e.currentTarget as HTMLInputElement).value;
+    selectedIdx = 0;
+    search.setQuery(v);
+  }
+
+  function clearSearch() {
+    search.clear();
+    selectedIdx = 0;
+    searchInput?.focus();
+  }
+
+  function openHit(h: { name: string; kind: PackageKind }) {
+    ui.selectPackage(h.name, h.kind);
+  }
+
+  function onSearchKey(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      if (search.query) {
+        e.preventDefault();
+        clearSearch();
+      } else {
+        searchInput?.blur();
+      }
+      return;
+    }
+    if (!dropdownOpen) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      selectedIdx = Math.min(topHits.length - 1, selectedIdx + 1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      selectedIdx = Math.max(0, selectedIdx - 1);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const hit = topHits[selectedIdx];
+      if (hit) {
+        openHit(hit);
+      } else if (search.query) {
+        // No selection — route to Discover with this query so the user
+        // gets the full result list.
+        ui.setSection("discover");
+        search.run(search.query);
+      }
+    }
+  }
 
   function badge(id: SidebarSection): string | null {
     if (id === "library") {
@@ -53,8 +132,6 @@
     }
     return null;
   }
-
-  function openSponsor() { void safeOpenUrl(SPONSOR_URL); }
 
   /**
    * Status dot color follows the spec in uxArchitecture.md §2:
@@ -84,26 +161,93 @@
   }
 </script>
 
-<aside class="sidebar" aria-label="Primary navigation">
+<aside class="sidebar" class:collapsed={ui.sidebarCollapsed} aria-label="Primary navigation">
   <!--
-    The brand wrapper is the sidebar's window-drag handle. Tauri's drag-region
-    handler uses click-vs-drag detection, so the .brand button inside still
-    fires its onclick (with an explicit opt-out for belt+suspenders).
+    Persistent type-ahead search above the nav. NO divider below the
+    search wrap — it visually flows straight into the nav list per
+    the user's "no separator" direction. Hidden when the sidebar is
+    collapsed (no room for an input in the icon-only rail).
   -->
-  <header class="brand-wrap" data-tauri-drag-region>
-    <button
-      type="button"
-      class="brand"
-      class:active={ui.section === "dashboard"}
-      aria-current={ui.section === "dashboard" ? "page" : undefined}
-      onclick={() => ui.setSection("dashboard")}
-      title="Dashboard (⌘0)"
-      data-tauri-drag-region="false"
-    >
-      <span class="brand-mark" aria-hidden="true">🍺</span>
-      <span class="brand-name">brew-browser</span>
-    </button>
-  </header>
+  {#if !ui.sidebarCollapsed}
+    <div class="search-wrap">
+      <span class="search-icon" aria-hidden="true"><SearchIcon size={14} /></span>
+      <input
+        bind:this={searchInput}
+        type="search"
+        role="combobox"
+        class="search-input"
+        placeholder="Search packages…"
+        value={search.query}
+        oninput={onSearchInput}
+        onfocus={() => (searchFocused = true)}
+        onblur={() => setTimeout(() => (searchFocused = false), 150)}
+        onkeydown={onSearchKey}
+        aria-label="Search packages"
+        aria-autocomplete="list"
+        aria-expanded={dropdownOpen}
+        aria-controls="sidebar-search-results"
+        spellcheck="false"
+        autocomplete="off"
+      />
+      {#if search.query}
+        <button
+          type="button"
+          class="search-clear"
+          onclick={clearSearch}
+          aria-label="Clear search"
+          title="Clear"
+        >
+          <XIcon size={12} />
+        </button>
+      {/if}
+
+      {#if dropdownOpen}
+        <div
+          id="sidebar-search-results"
+          class="search-dropdown"
+          role="listbox"
+          aria-label="Search results"
+        >
+          {#if search.loading && topHits.length === 0}
+            <div class="search-empty">Searching…</div>
+          {:else if search.error}
+            <div class="search-empty search-error">{search.error}</div>
+          {:else if topHits.length === 0}
+            <div class="search-empty">No matches for "{search.query}".</div>
+          {:else}
+            {#each topHits as hit, i (hit.kind + hit.name)}
+              <button
+                type="button"
+                class="search-hit"
+                class:selected={i === selectedIdx}
+                role="option"
+                aria-selected={i === selectedIdx}
+                onmousedown={(e) => { e.preventDefault(); openHit(hit); }}
+                onmouseenter={() => (selectedIdx = i)}
+              >
+                <span class="hit-name truncate">{hit.name}</span>
+                <Pill tone={hit.kind === "formula" ? "formula" : "cask"}>{hit.kind}</Pill>
+                {#if hit.installed}
+                  <Pill tone="success">installed</Pill>
+                {/if}
+              </button>
+            {/each}
+            <button
+              type="button"
+              class="search-all"
+              onmousedown={(e) => {
+                e.preventDefault();
+                ui.setSection("discover");
+                search.run(search.query);
+              }}
+            >
+              See all results in Discover →
+            </button>
+          {/if}
+        </div>
+      {/if}
+    </div>
+  {/if}
 
   <nav>
     <ul>
@@ -142,16 +286,6 @@
       <span class="dot" aria-hidden="true"></span>
       <span class="status-label">{env.shortLabel}</span>
     </button>
-    <button
-      type="button"
-      class="donate"
-      title="Open GitHub Sponsors page in your browser"
-      aria-label="Donate to brew-browser on GitHub Sponsors"
-      onclick={openSponsor}
-    >
-      <Heart size={11} />
-      <span>Donate</span>
-    </button>
   </footer>
 </aside>
 
@@ -164,35 +298,132 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    transition: width var(--motion-duration-base, 180ms) var(--motion-ease-out, ease);
   }
-  .brand-wrap {
-    border-bottom: 1px solid var(--color-border);
-    /* Top padding clears the traffic-light cluster; the .brand button sits
-       below the traffic lights at its natural sidebar width. Window dragging
-       is handled by the separate .titlebar-drag-region overlay (+layout.svelte). */
-    padding: 44px var(--space-2) var(--space-2) var(--space-2);
+  /* Honor prefers-reduced-motion: don't animate the width change. */
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar { transition: none; }
   }
-  .brand {
+  /* ── Type-ahead search ── No border-bottom: the search flows
+     straight into the nav list per the user's "no separator" spec. */
+  .search-wrap {
+    position: relative;
+    padding: var(--space-2);
+  }
+  .search-icon {
+    position: absolute;
+    left: calc(var(--space-2) + 8px);
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--color-text-muted);
+    pointer-events: none;
+    display: inline-flex;
+  }
+  /* Background uses the panel-body gray (--color-surface) — sitting on
+     the sidebar's raised chrome, this reads as a subtle input field
+     without competing visually with the SELECTED nav item, which uses
+     the darker --color-surface-sunken. Border crisps up on focus. */
+  .search-input {
+    width: 100%;
+    padding: 6px 26px 6px 30px;
+    background: var(--color-surface);
+    border-radius: var(--radius-md);
+    color: var(--color-text-primary);
+    font-size: var(--text-body-sm);
+    line-height: 1.2;
+    border: 1px solid var(--color-border);
+    transition: border-color var(--motion-duration-fast) var(--motion-ease-out),
+                background-color var(--motion-duration-fast) var(--motion-ease-out);
+  }
+  .search-input::placeholder { color: var(--color-text-muted); }
+  .search-input:focus {
+    outline: none;
+    background: var(--color-surface);
+    border-color: var(--color-focus, var(--color-brand));
+  }
+  /* Strip the WebKit search-input UA chrome (rounded silver pill + X). */
+  .search-input::-webkit-search-cancel-button,
+  .search-input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+
+  .search-clear {
+    position: absolute;
+    right: calc(var(--space-2) + 6px);
+    top: 50%;
+    transform: translateY(-50%);
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    color: var(--color-text-muted);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+  }
+  .search-clear:hover { color: var(--color-text-primary); background: var(--color-surface-raised); }
+
+  /* Results dropdown — anchored under the input. Widens past the
+     sidebar's 200 px so longer package names don't ellipsize. */
+  .search-dropdown {
+    position: absolute;
+    top: calc(100% - 2px);
+    left: var(--space-2);
+    right: var(--space-2);
+    min-width: 260px;
+    max-height: 280px;
+    overflow-y: auto;
+    background: var(--color-surface-raised);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 8px 24px -4px color-mix(in oklch, black 30%, transparent);
+    z-index: 30;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .search-hit {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    width: 100%;
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-md);
-    font-weight: var(--fw-semibold);
-    font-size: var(--text-body);
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    background: transparent;
     color: var(--color-text-primary);
+    font-size: var(--text-body-sm);
     text-align: left;
     cursor: pointer;
-    transition: background-color var(--motion-duration-fast) var(--motion-ease-out);
   }
-  .brand:hover { background: var(--color-surface-sunken); }
-  .brand.active {
+  .search-hit:hover,
+  .search-hit.selected {
     background: var(--color-surface-sunken);
-    color: var(--color-text-primary);
   }
-  .brand-mark { font-size: 16px; }
-  .brand-name { white-space: nowrap; }
+  .hit-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: var(--fw-medium);
+  }
+  .search-empty {
+    padding: 12px;
+    color: var(--color-text-muted);
+    font-size: var(--text-body-sm);
+    text-align: center;
+  }
+  .search-error { color: var(--color-danger); }
+  .search-all {
+    margin-top: 2px;
+    padding: 6px 8px;
+    background: transparent;
+    color: var(--color-text-link, var(--color-brand));
+    font-size: var(--text-caption);
+    border-radius: var(--radius-sm);
+    text-align: left;
+    cursor: pointer;
+  }
+  .search-all:hover { background: var(--color-surface-sunken); }
 
   nav { flex: 1; padding: var(--space-2); overflow-y: auto; }
   ul { display: flex; flex-direction: column; gap: 1px; }
@@ -240,25 +471,6 @@
     flex-direction: column;
     gap: var(--space-2);
   }
-  .donate {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    align-self: flex-start;
-    padding: 2px var(--space-1);
-    margin: -2px calc(-1 * var(--space-1));
-    background: transparent;
-    color: var(--color-text-muted);
-    font-size: var(--text-caption);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: background-color var(--motion-duration-fast) var(--motion-ease-out),
-                color var(--motion-duration-fast) var(--motion-ease-out);
-  }
-  .donate:hover {
-    background: var(--color-surface-sunken);
-    color: var(--color-brand);
-  }
   .status {
     display: inline-flex;
     align-items: center;
@@ -284,4 +496,49 @@
   .status-running .dot { background: var(--color-warning); }
   .status-missing .dot { background: var(--color-danger); }
   .status-unknown .dot { background: var(--color-text-muted); }
+
+  /* ── Collapsed sidebar (icon-rail mode) ──
+     Width drops from 200 → 56 px. Everything that depends on width
+     collapses to icon-only and centres in the rail. Native `title`
+     tooltips on every interactive element keep the labels reachable
+     on hover — pragmatic for a sidebar with many items (the same
+     pattern Finder uses for its collapsed sidebar). */
+  .sidebar.collapsed { width: 56px; }
+
+  /* Nav items: icon centred; label hidden. Badges shrink to a small
+     overlay dot so the user still sees "there's something" without a
+     stretched-out tooltip-only rail. */
+  .sidebar.collapsed .nav-item {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+    position: relative;
+  }
+  .sidebar.collapsed .nav-item .label { display: none; }
+  .sidebar.collapsed .nav-item .badge {
+    position: absolute;
+    top: 2px;
+    right: 4px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 4px;
+    font-size: 9px;
+    line-height: 1;
+  }
+  nav > ul { gap: 1px; }
+
+  /* Footer in collapsed mode: centre the lone status row. */
+  .sidebar.collapsed .foot {
+    align-items: center;
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+  }
+
+  /* Status row: keep the dot, drop the text. */
+  .sidebar.collapsed .status {
+    justify-content: center;
+    margin: 0;
+    padding: 4px;
+  }
+  .sidebar.collapsed .status-label { display: none; }
 </style>

@@ -63,7 +63,7 @@
     "operatingSystem": "macOS 13+",
     "url": "https://brew-browser.zerologic.com/",
     "downloadUrl": "https://github.com/msitarzewski/brew-browser/releases/latest",
-    "softwareVersion": "0.1.0",
+    "softwareVersion": "0.2.0",
     "license": "https://opensource.org/licenses/MIT",
     "author": {
       "@type": "Person",
@@ -104,13 +104,18 @@
       <div class="features">
 
         <div class="feature">
+          <h3>Dashboard</h3>
+          <p>Your Homebrew at a glance: installed count, updates available, brew version, formula/cask split, top-categories donut, and storage usage with one-click Reveal in Finder.</p>
+        </div>
+
+        <div class="feature">
           <h3>Library</h3>
           <p>Every installed formula and cask in one dense, filterable list, with outdated badges and a slide-over detail panel. Cask icons extracted from the real <code>.app</code> bundle.</p>
         </div>
 
         <div class="feature">
           <h3>Discover</h3>
-          <p>Search the full Homebrew package index and install straight from the result row. Categories on the way — built offline against the published package data, not scraped.</p>
+          <p>Search the full Homebrew package index (15,725 packages, bundled at build time) by name or by the 19-category tile grid. AI-curated friendly names and summaries baked in — zero LLM calls at runtime.</p>
         </div>
 
         <div class="feature">
@@ -124,13 +129,18 @@
         </div>
 
         <div class="feature">
+          <h3>Services</h3>
+          <p>List, start, stop, and restart background services managed by launchd through <code>brew services</code>. Status pills update live.</p>
+        </div>
+
+        <div class="feature">
           <h3>Activity</h3>
           <p>Every <code>brew</code> invocation streams live into a bottom drawer with full stdout, stderr, and session history. Nothing hidden, nothing surprising.</p>
         </div>
 
         <div class="feature">
           <h3>Native &amp; fast</h3>
-          <p>Tauri 2 native shell, ~6 MB binary, system WebView. Cmd+K command palette, Cmd+1…5 to jump between sections, drag-resizable detail pane.</p>
+          <p>Tauri 2 native shell, system WebView, native macOS title bar with traffic-light alignment. Cmd+K command palette, Cmd+0…6 to jump between sections, persistent type-ahead search in the sidebar, drag-resizable detail pane, collapsible sidebar.</p>
         </div>
 
       </div>
@@ -189,8 +199,10 @@ npm run tauri build      # produces a .dmg in src-tauri/target/release/bundle/</
         <a href="https://github.com/msitarzewski/brew-browser">Source</a> ·
         <a href="https://github.com/msitarzewski/brew-browser/blob/main/LICENSE">MIT License</a> ·
         <a href="https://github.com/msitarzewski/brew-browser/blob/main/SECURITY.md">Security</a> ·
-        <a href="https://github.com/msitarzewski/brew-browser/blob/main/CONTRIBUTING.md">Contributing</a>
+        <a href="https://github.com/msitarzewski/brew-browser/blob/main/CONTRIBUTING.md">Contributing</a> ·
+        <a href="https://github.com/sponsors/msitarzewski">♥ Sponsor</a>
       </p>
+      <p class="copy">Built with <a href="https://github.com/msitarzewski/agency-agents">Agency Agents</a>, by the creator of Agency Agents.</p>
       <p class="copy">© 2026 Michael Sitarzewski. The app is a respectful UI on top of <a href="https://brew.sh">Homebrew</a>, which does all the actual work.</p>
     </div>
   </footer>

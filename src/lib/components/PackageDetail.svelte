@@ -12,6 +12,7 @@
   import Pill from "./Pill.svelte";
   import Button from "./Button.svelte";
   import DestructiveConfirm from "./DestructiveConfirm.svelte";
+  import InfoButton from "./InfoButton.svelte";
   import LoadingState from "./LoadingState.svelte";
   import Play from "@lucide/svelte/icons/play";
   import Square from "@lucide/svelte/icons/square";
@@ -42,7 +43,6 @@
   import { safeOpenUrl } from "$lib/util/url";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
   import IssueModal from "./IssueModal.svelte";
-  import Sparkles from "@lucide/svelte/icons/sparkles";
   import { brewErrorMessage, isBrewError, normalizeServiceStatus, type EnrichmentEntry, type IconSource, type PackageDetail } from "$lib/types";
 
   // Categories file is small; ensure it's loaded so the pills can render. Idempotent.
@@ -304,9 +304,11 @@
    * so the user lands on the filtered view, not an obscured one.
    */
   function jumpToCategory(slug: string) {
-    discover.selectOnly(slug);
+    // Order matters: setSection clears chip filters on any real section
+    // change, so we must call it BEFORE selectOnly. See ui.setSection().
     ui.closeDetail();
     ui.setSection("discover");
+    discover.selectOnly(slug);
   }
 
   /** Brew service entry for this package, if it has one. Formulae only. */
@@ -425,6 +427,20 @@
     }
   });
 
+  /** Intercept any authed GitHub action while signed out: deep-link to
+      Settings → GitHub and toast a hint. Returns false when the caller
+      should stop. Keeps the action buttons usable without painting a
+      static "sign in to …" hint in every package detail. */
+  function requireGithubSignIn(actionLabel: string): boolean {
+    if (githubSignedIn) return true;
+    ui.openSettings("github");
+    toast.info(
+      `Sign in to GitHub to ${actionLabel}`,
+      "Use the Sign in with GitHub button in Settings.",
+    );
+    return false;
+  }
+
   /** True while a toggle-star IPC is in flight (per current package).
       The button disables itself during the call so a double-click can't
       fire two opposite IPCs. */
@@ -432,6 +448,7 @@
 
   async function onToggleStar() {
     if (!pkg?.homepage || starToggling) return;
+    if (!requireGithubSignIn("star this package")) return;
     starToggling = true;
     const hp = pkg.homepage;
     try {
@@ -454,6 +471,7 @@
 
   async function onToggleWatch() {
     if (!pkg?.homepage || watchPending) return;
+    if (!requireGithubSignIn("watch this package")) return;
     watchPending = true;
     const want = !watching;
     try {
@@ -497,6 +515,7 @@
 
   async function openPackageIssue() {
     if (!pkg?.homepage) return;
+    if (!requireGithubSignIn("file an issue on this repo")) return;
     const repoInfo = githubRepoFromHomepage(pkg.homepage);
     if (!repoInfo) return;
     const ver = await ensureAppVersion();
@@ -594,9 +613,9 @@
       <!-- AI-enriched badge intentionally NOT shown next to the title.
            The friendly name is the title (when AI is on); the raw token
            still appears in the meta `Token` row below, so users always
-           see both. AI provenance is documented in Settings → Appearance.
-           Per-field "AI-enriched" badges still appear on summary / use
-           cases / similar packages / tags lower in the body. -->
+           see both. Per-field provenance is surfaced via (i) info
+           popovers next to each enriched section (Categories, Tags,
+           Summary, Why install this?, Similar packages). -->
       <h1 bind:this={headingEl} tabindex="-1" class="detail-title">
         {enriched?.friendlyName ?? ui.selectedPackage.name}
       </h1>
@@ -668,21 +687,12 @@
                     <span>{categories.labelOf(slug)}</span>
                   </button>
                 {/each}
-                <!-- Phase 12f — "Wrong?" link files a category-suggestion
-                     issue against msitarzewski/brew-browser. Always
-                     visible regardless of sign-in: signed-in opens the
-                     in-app modal, signed-out deeplinks to the new-issue
-                     URL with URL-encoded params. -->
-                <button
-                  type="button"
-                  class="wrong-link"
-                  onclick={openWrongCategoryIssue}
-                  title={githubSignedIn
-                    ? "Suggest different categories for this package"
-                    : "Suggest different categories on GitHub"}
-                >
-                  Wrong?
-                </button>
+                <InfoButton
+                  title="About categories"
+                  body="Generated offline at build time by Claude Haiku 4.5 — no network or LLM calls happen while you use brew-browser. Open an issue if a category looks off and we'll fix it in the next release."
+                  label="About this package's categories"
+                  onReport={openWrongCategoryIssue}
+                />
               </dd>
             </div>
           {/if}
@@ -695,21 +705,17 @@
               <dt>Tags</dt>
               <dd class="tag-pills">
                 {#each enriched.tags as t (t)}
-                  <span class="tag-pill" title="AI-enriched tag">
+                  <span class="tag-pill">
                     <Tag size={10} aria-hidden="true" />
                     <span>{t}</span>
                   </span>
                 {/each}
-                <button
-                  type="button"
-                  class="wrong-link"
-                  onclick={() => openWrongEnrichedIssue("tags")}
-                  title={githubSignedIn
-                    ? "Suggest different tags for this package"
-                    : "Suggest different tags on GitHub"}
-                >
-                  Wrong?
-                </button>
+                <InfoButton
+                  title="About tags"
+                  body="Generated offline at build time by Claude Haiku 4.5 — no network or LLM calls happen while you use brew-browser. Open an issue if a tag looks off and we'll fix it in the next release."
+                  label="About these tags"
+                  onReport={() => openWrongEnrichedIssue("tags")}
+                />
               </dd>
             </div>
           {/if}
@@ -720,23 +726,12 @@
              native description never disappears. -->
         {#if enriched?.summary}
           <blockquote class="enriched-summary">
-            <p>{enriched.summary}</p>
-            <span class="enriched-footer">
-              <span class="ai-badge" title="Generated at build time by Claude Haiku 4.5">
-                <Sparkles size={10} aria-hidden="true" />
-                AI-enriched
-              </span>
-              <button
-                type="button"
-                class="wrong-link"
-                onclick={() => openWrongEnrichedIssue("summary")}
-                title={githubSignedIn
-                  ? "Suggest a different summary for this package"
-                  : "Suggest a different summary on GitHub"}
-              >
-                Wrong?
-              </button>
-            </span>
+            <p>{enriched.summary}&nbsp;<InfoButton
+              title="About this summary"
+              body="Generated offline at build time by Claude Haiku 4.5 — no network or LLM calls happen while you use brew-browser. Open an issue if the summary looks off and we'll fix it in the next release."
+              label="About this summary"
+              onReport={() => openWrongEnrichedIssue("summary")}
+            /></p>
           </blockquote>
         {/if}
 
@@ -756,20 +751,12 @@
           <section class="enriched-section" aria-label="Use cases">
             <h3>
               Why install this?
-              <span class="ai-badge ai-badge-inline" title="Generated at build time by Claude Haiku 4.5">
-                <Sparkles size={10} aria-hidden="true" />
-                AI-enriched
-              </span>
-              <button
-                type="button"
-                class="wrong-link wrong-link-h3"
-                onclick={() => openWrongEnrichedIssue("use_cases")}
-                title={githubSignedIn
-                  ? "Suggest different use cases for this package"
-                  : "Suggest different use cases on GitHub"}
-              >
-                Wrong?
-              </button>
+              <InfoButton
+                title="About use cases"
+                body="Generated offline at build time by Claude Haiku 4.5 — no network or LLM calls happen while you use brew-browser. Open an issue if these use cases look off and we'll fix them in the next release."
+                label="About these use cases"
+                onReport={() => openWrongEnrichedIssue("use_cases")}
+              />
             </h3>
             <ul class="use-cases">
               {#each enriched.useCases as uc (uc)}
@@ -785,20 +772,12 @@
           <section class="enriched-section" aria-label="Similar packages">
             <h3>
               Similar packages
-              <span class="ai-badge ai-badge-inline" title="Generated at build time by Claude Haiku 4.5">
-                <Sparkles size={10} aria-hidden="true" />
-                AI-enriched
-              </span>
-              <button
-                type="button"
-                class="wrong-link wrong-link-h3"
-                onclick={() => openWrongEnrichedIssue("similar")}
-                title={githubSignedIn
-                  ? "Suggest different related packages"
-                  : "Suggest different related packages on GitHub"}
-              >
-                Wrong?
-              </button>
+              <InfoButton
+                title="About similar packages"
+                body="Generated offline at build time by Claude Haiku 4.5 — no network or LLM calls happen while you use brew-browser. Open an issue if these suggestions look off and we'll fix them in the next release."
+                label="About these similar packages"
+                onReport={() => openWrongEnrichedIssue("similar")}
+              />
             </h3>
             <div class="similar-pills">
               {#each enriched.similar as token (token)}
@@ -855,8 +834,8 @@
                   class="gh-license-mismatch"
                   title={`brew reports: ${pkg.license} · GitHub reports: ${s.licenseSpdx}`}
                 >
-                  <AlertCircle size={12} />
-                  License mismatch — brew: <code>{pkg.license}</code>, GitHub: <code>{s.licenseSpdx}</code>
+                  <AlertCircle size={12} aria-hidden="true" />
+                  <span>License mismatch — brew: <code>{pkg.license}</code>, GitHub: <code>{s.licenseSpdx}</code></span>
                 </div>
               {/if}
             {:else if githubOutcome.kind === "rateLimited"}
@@ -881,42 +860,49 @@
             {/if}
             <!-- kind === "miss" renders nothing -->
 
-            <!-- Phase 12f — authed actions row. Only paint when the
-                 stats card itself rendered (so non-GitHub homepages
-                 and paranoid-blocked rows stay quiet) AND the user is
-                 signed in. -->
-            {#if githubActionsEligible && pkg?.homepage}
+            <!-- Phase 12f — actions row. Painted whenever the stats card
+                 itself rendered (so non-GitHub homepages and paranoid-
+                 blocked rows stay quiet). Clicking any action while
+                 signed-out intercepts via `requireGithubSignIn()` —
+                 deep-links to Settings → GitHub with a toast hint. No
+                 static "Sign in to …" line; the prompt only appears when
+                 the user actually wants to act. -->
+            {#if githubStatsEligible && pkg?.homepage}
               <div class="gh-actions">
                 <button
                   type="button"
                   class="gh-action"
-                  class:active={starredState === true}
+                  class:active={githubSignedIn && starredState === true}
                   onclick={onToggleStar}
-                  disabled={starToggling || starredState === "unknown"}
-                  title={starredState === true
-                    ? "Unstar this repository"
-                    : starredState === false
-                      ? "Star this repository"
-                      : "Loading starred state…"}
+                  disabled={starToggling || (githubSignedIn && starredState === "unknown")}
+                  title={!githubSignedIn
+                    ? "Sign in to GitHub to star this repository"
+                    : starredState === true
+                      ? "Unstar this repository"
+                      : starredState === false
+                        ? "Star this repository"
+                        : "Loading starred state…"}
                 >
                   <Star
                     size={14}
-                    fill={starredState === true ? "currentColor" : "none"}
+                    fill={githubSignedIn && starredState === true ? "currentColor" : "none"}
                   />
-                  <span>
-                    {#if starredState === true}Starred{:else if starredState === false}Star{:else}Star{/if}
-                  </span>
+                  <span>{githubSignedIn && starredState === true ? "Starred" : "Star"}</span>
                 </button>
 
                 <button
                   type="button"
                   class="gh-action"
-                  class:active={watching === true}
+                  class:active={githubSignedIn && watching === true}
                   onclick={onToggleWatch}
                   disabled={watchPending}
-                  title={watching === true ? "Stop watching" : "Watch for activity"}
+                  title={!githubSignedIn
+                    ? "Sign in to GitHub to watch this repository"
+                    : watching === true
+                      ? "Stop watching"
+                      : "Watch for activity"}
                 >
-                  {#if watching === true}
+                  {#if githubSignedIn && watching === true}
                     <EyeIcon size={14} />
                     <span>Watching</span>
                   {:else}
@@ -929,16 +915,14 @@
                   type="button"
                   class="gh-action"
                   onclick={openPackageIssue}
-                  title={`File an issue against ${githubRepoFromHomepage(pkg.homepage)?.owner ?? ""}/${githubRepoFromHomepage(pkg.homepage)?.repo ?? ""}`}
+                  title={!githubSignedIn
+                    ? "Sign in to GitHub to file an issue"
+                    : `File an issue against ${githubRepoFromHomepage(pkg.homepage)?.owner ?? ""}/${githubRepoFromHomepage(pkg.homepage)?.repo ?? ""}`}
                 >
                   <MessageSquarePlus size={14} />
                   <span>File issue</span>
                 </button>
               </div>
-            {:else if githubStatsEligible && !githubSignedIn}
-              <p class="gh-signin-hint">
-                Sign in via Settings &rarr; GitHub to star, watch, or file issues.
-              </p>
             {/if}
           </section>
         {/if}
@@ -1097,8 +1081,8 @@
   /* Local rules for the detail header. The shared `.panel-head` baseline
      (in app.css) pins height, padding, border-bottom, and h1 typography
      so the detail header separator lines up with every main panel head
-     to the pixel. We only customise: the title's truncation + AI-enriched
-     badge, the type pill's right-alignment, and the close button. */
+     to the pixel. We only customise: the title's truncation, the type
+     pill's right-alignment, and the close button. */
   .detail-title {
     /* Truncate long friendly names so they don't push the type pill off */
     overflow: hidden;
@@ -1351,12 +1335,24 @@
     border-radius: var(--radius-sm);
     color: var(--color-warning-strong);
   }
+  /* Render as a single flowing line: the icon is a flex child that
+     doesn't shrink, and the whole sentence (including the inline <code>
+     elements for license names) lives inside one span so it wraps as
+     prose instead of breaking between the prose and the code blocks. */
   .gh-license-mismatch {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
     color: var(--color-text-muted);
     font-size: var(--text-caption);
+    line-height: 1.45;
+  }
+  .gh-license-mismatch :global(svg) {
+    flex: none;
+    margin-top: 3px;
+  }
+  .gh-license-mismatch > span {
+    min-width: 0;
   }
   .gh-license-mismatch code {
     font-family: var(--font-mono);
@@ -1407,59 +1403,7 @@
   }
   .gh-action:disabled { opacity: 0.5; cursor: default; }
 
-  .gh-signin-hint {
-    margin-top: 6px;
-    padding-top: var(--space-2);
-    border-top: 1px dashed var(--color-border);
-    color: var(--color-text-muted);
-    font-size: var(--text-body-sm);
-  }
-
-  /* "Wrong?" link on the Categories row — small, inline, plain. */
-  .wrong-link {
-    display: inline-flex;
-    align-items: center;
-    padding: 0 var(--space-2);
-    height: 20px;
-    color: var(--color-text-muted);
-    font-size: var(--text-caption);
-    font-weight: var(--fw-medium);
-    background: transparent;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: color 0.12s ease, background 0.12s ease;
-  }
-  .wrong-link:hover {
-    color: var(--color-text-link);
-    background: var(--color-surface-sunken);
-    text-decoration: underline;
-  }
-  .wrong-link:focus-visible {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 2px;
-  }
-
   /* ── Phase 13 — enriched metadata visuals ── */
-
-  /* "AI-enriched" badge — small, inline, semantic. */
-  .ai-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    padding: 1px 6px;
-    height: 16px;
-    border-radius: var(--radius-full);
-    background: var(--color-brand-subtle, rgba(245, 158, 11, 0.12));
-    color: var(--color-brand, var(--color-accent));
-    font-size: 10px;
-    font-weight: var(--fw-medium);
-    line-height: 1;
-    flex: none;
-  }
-  .ai-badge-inline {
-    margin-left: var(--space-2);
-    vertical-align: middle;
-  }
 
   /* Enriched summary blockquote — between meta dl and brew desc. */
   .enriched-summary {
@@ -1478,11 +1422,6 @@
     line-height: var(--lh-normal);
     overflow-wrap: anywhere;
   }
-  .enriched-footer {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
 
   /* Use cases + similar sections share a heading style. */
   .enriched-section {
@@ -1498,9 +1437,6 @@
     align-items: center;
     flex-wrap: wrap;
     gap: var(--space-2);
-  }
-  .wrong-link-h3 {
-    margin-left: auto;
   }
 
   .use-cases {
