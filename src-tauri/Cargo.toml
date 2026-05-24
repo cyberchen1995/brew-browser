@@ -37,9 +37,25 @@ dirs = "5"
 # Base64 encoding for cask_icon data URLs
 base64 = "0.22"
 
+# Gzip codec for the bundled catalog (Phase 12a). Used both for
+# decompressing the bundled `formula.json.gz` / `cask.json.gz` and for
+# compressing the user-refreshed copy before atomic write.
+flate2 = "1"
+
 # Structured logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# OS-native secret storage. Phase 12e (GitHub Device Flow) stores the
+# OAuth access token in the macOS Keychain under
+# `dev.openbrew.browser` / `github_access_token`. The crate fans out to
+# Keychain on macOS, Credential Manager on Windows, Secret Service on
+# Linux — we only use the macOS path.
+keyring = { version = "3", features = ["apple-native"] }
+# URL-encoded form bodies for the GitHub Device Flow endpoints.
+# `serde_urlencoded` is already pulled in transitively by `reqwest`
+# but `url` (parsing) is not. Keep this dep tight.
+url = "2"
 
 # Native macOS window vibrancy (NSVisualEffectView) — gives the sidebar that
 # "frosted glass" look the rest of macOS uses. Cross-platform crate; we only

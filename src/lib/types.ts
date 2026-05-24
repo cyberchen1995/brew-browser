@@ -303,6 +303,136 @@ export interface TrendingReport {
 }
 
 // =========================================================
+// 2.10 Settings (Phase 12d)
+// =========================================================
+
+/**
+ * Catalog auto-refresh cadence. Wire-format mirrors the Rust enum
+ * `CatalogAutoRefresh` (kebab-case).
+ */
+export type CatalogAutoRefresh = "off" | "weekly" | "daily";
+
+/**
+ * Cask icon fetching mode. `all` matches the current Phase 8 behaviour
+ * where every uninstalled cask with a homepage probes for a favicon.
+ * `installed-only` skips the homepage cascade; `off` disables even
+ * installed-app icon extraction.
+ */
+export type CaskIconMode = "off" | "installed-only" | "all";
+
+/**
+ * Persisted user settings (Phase 12d). Lives at
+ * `~/Library/Application Support/brew-browser/settings.json` and is
+ * round-tripped via `settingsGet` / `settingsSet`.
+ *
+ * Bounds (enforced server-side, also re-checked client-side for snappier
+ * UX): `catalogStaleBannerDays` ∈ [1, 365]; `trendingTtlMinutes` ∈ [5, 1440].
+ */
+export interface Settings {
+  /** Master switch — when true, every outbound command fails with
+      `paranoid_mode_blocked`. */
+  paranoidMode: boolean;
+  catalogAutoRefresh: CatalogAutoRefresh;
+  catalogStaleBannerDays: number;
+  caskIconMode: CaskIconMode;
+  trendingTtlMinutes: number;
+  /** Phase 12c — when true, PackageDetail probes `api.github.com` for
+      repo stats whenever the package's homepage is a GitHub URL. Off
+      by default; the user opts in via Settings → GitHub. Independent
+      of sign-in (anonymous probes still get the 60/hr public limit). */
+  githubEnabled: boolean;
+}
+
+/** Defaults matching the Rust `Settings::default()`. Used when seeding
+    the settings store before the first `settingsGet` resolves so the UI
+    doesn't have to render an empty state. */
+export const SETTINGS_DEFAULTS: Settings = {
+  paranoidMode: false,
+  catalogAutoRefresh: "off",
+  catalogStaleBannerDays: 14,
+  caskIconMode: "all",
+  trendingTtlMinutes: 60,
+  // Phase 12c — anonymous GitHub stats opt-in. Off by default per the
+  // "zero outbound unless user consented" posture.
+  githubEnabled: false,
+};
+
+// =========================================================
+// 2.11 GitHub (Phase 12c + 12e)
+// =========================================================
+
+/**
+ * Anonymous (or token-authenticated) repo metadata fetched from
+ * `api.github.com/repos/{owner}/{repo}`. The backend caches the
+ * response on disk for 24h, keyed by the validated owner/repo pair.
+ *
+ * `null`-able fields are absent on real-world repos: a repo with no
+ * GitHub release will have `lastReleaseTag === null`, a live repo
+ * will have `archivedAt === null`, etc.
+ */
+export interface RepoStats {
+  owner: string;
+  repo: string;
+  stars: number;
+  forks: number;
+  openIssues: number;
+  lastReleaseTag: string | null;
+  lastReleaseDate: string | null;
+  archived: boolean;
+  archivedAt: string | null;
+  licenseSpdx: string | null;
+  defaultBranch: string;
+  primaryLanguage: string | null;
+}
+
+/**
+ * Sign-in status surface returned by `githubStatus`.
+ *
+ * **Token is never on the wire** — only the derived "what can the
+ * session do?" view is. See `github::auth::GithubStatusDto` in the
+ * backend for the matching Rust struct and the regression test that
+ * pins the wire shape.
+ */
+export interface GithubStatus {
+  signedIn: boolean;
+  username: string | null;
+  scopes: string[];
+}
+
+/**
+ * Result of `githubSigninStart` — payload the frontend uses to show
+ * the user code and drive the polling loop.
+ */
+export interface DeviceFlowStart {
+  /** Short human-readable code (e.g. `WDJB-MJHT`) to type at
+      `verificationUri`. */
+  userCode: string;
+  /** URL to open in the browser (usually `github.com/login/device`). */
+  verificationUri: string;
+  /** Seconds until `deviceCode` expires. After this, polling will
+      return `expired`. */
+  expiresIn: number;
+  /** Server-recommended polling cadence in seconds. Must be honoured. */
+  interval: number;
+  /** Opaque code passed to `githubSigninPoll`. Never shown to the user. */
+  deviceCode: string;
+}
+
+/**
+ * Discriminated union returned by each `githubSigninPoll` call.
+ *
+ * The `slowDown` variant means GitHub asked us to back off — the
+ * frontend should double its polling interval before the next call,
+ * per RFC 8628 §3.5.
+ */
+export type DeviceFlowPoll =
+  | { kind: "pending" }
+  | { kind: "slowDown" }
+  | { kind: "approved"; username: string | null; scopes: string[] }
+  | { kind: "denied" }
+  | { kind: "expired" };
+
+// =========================================================
 // 3.3 Error model
 // =========================================================
 
@@ -317,7 +447,12 @@ export type BrewErrorPayload =
   | { code: "job_not_found";      jobId: string }
   | { code: "canceled" }
   | { code: "brewfile_not_found"; id: string }
-  | { code: "internal";           message: string };
+  | { code: "internal";           message: string }
+  | { code: "paranoid_mode_blocked"; feature: string }
+  | { code: "github_rate_limited"; resetAt: number }
+  | { code: "keychain_unavailable"; message: string }
+  | { code: "auth_required" }
+  | { code: "scope_required"; scope: string };
 
 /** Type-narrowing helper: is the thrown value a BrewErrorPayload? */
 export function isBrewError(e: unknown): e is BrewErrorPayload {
@@ -343,6 +478,18 @@ export function brewErrorMessage(e: BrewErrorPayload): string {
     case "canceled":            return "Operation canceled.";
     case "brewfile_not_found":  return `Brewfile "${e.id}" not found.`;
     case "internal":            return `Internal error: ${e.message}`;
+    case "paranoid_mode_blocked":
+      return `Paranoid mode is on — ${e.feature} is blocked. Disable it in Settings → Network.`;
+    case "github_rate_limited": {
+      const reset = e.resetAt > 0 ? new Date(e.resetAt * 1000).toLocaleTimeString() : "soon";
+      return `GitHub API rate limit reached. Resets at ${reset}. Sign in to lift the limit.`;
+    }
+    case "keychain_unavailable":
+      return `macOS Keychain unavailable: ${e.message}`;
+    case "auth_required":
+      return "Sign in to GitHub to use this feature.";
+    case "scope_required":
+      return `GitHub permission "${e.scope}" required. Sign in again to grant it.`;
   }
 }
 

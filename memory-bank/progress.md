@@ -38,15 +38,17 @@
 | **Phase 11b — Services** | ✅ sidebar item ⌘5, page with start/stop/restart, per-package detail card, sidebar badge for running count, uncommitted |
 | **Phase 11c — Native macOS feel** | ✅ vibrancy + drag regions (data-tauri-drag-region + capability), traffic-light-aware sidebar, uncommitted |
 | **Phase 11d — Activity persistence** | ✅ localStorage mirror, cap 50 jobs / 500 lines, hydrate on bootstrap, uncommitted |
-| **Phase 12a — Bundled catalog + manual refresh** | pending — see decisions.md |
-| **Phase 12b — Settings shell** | pending |
-| **Phase 12c — GitHub anonymous tier** | pending |
-| **Phase 12d — Settings: network + paranoid** | pending |
-| **Phase 12e — GitHub Device Flow OAuth + Keychain** | pending |
-| **Phase 12f — GitHub authed actions** | pending |
-| **Phase 9c — "Wrong?" GitHub-issue link** | pending (waits on 12c/e) |
-| **Phase 9d — `installedAt` on Package + Last-Updated sort** | pending (needs backend field) |
-| **Phase 10 — Recipes** | pending (depends on catalog for validation) |
+| **Phase 12a — Bundled catalog + manual refresh** | ✅ |
+| **Phase 12b — Settings shell** | ✅ |
+| **Phase 12c — GitHub anonymous tier** | ✅ (combined with 12e in one Backend Architect pass) |
+| **Phase 12d — Settings: network + paranoid + settings persistence** | ✅ |
+| **Phase 12e — GitHub Device Flow OAuth + Keychain** | ✅ (combined with 12c) |
+| **Phase 12f — GitHub authed actions** | next (after Wave 1+2 commit) |
+| **Phase 13 — Catalog enrichment (Haiku)** | queued, parallel-OK with 12f |
+| **Phase 14 — bundled cask icons** | DROPPED (trademark/redistribution risk) |
+| **Phase 9c — "Wrong?" GitHub-issue link** | folds into 12f |
+| **Phase 9d — `installedAt` on Package + Last-Updated sort** | small standalone, not in any phase |
+| **Phase 10 — Recipes** | deferred — catalog now available so unblocked |
 
 ### Phase 9b notes
 
@@ -160,3 +162,81 @@ Single big session 2026-05-24-night. Highlights:
 ├── docs/icon/                        master SVG + size previews
 └── memory-bank/                      20 files (this dir)
 ```
+
+## 2026-05-24 (late session — Phase 12 Wave 1 + Wave 2)
+
+### Done
+
+- ✅ Commit `84ad010` pushed (Phase 9 + 11 + memory bank refresh)
+- ✅ Phase 12 plan written: `memory-bank/phase12-plan.md`
+- ✅ Pre-implementation Security Engineer review: `memory-bank/scans/phase12-security-review.md` — APPROVED with explicit gates
+- ✅ **Phase 12a** (Backend Architect agent) — bundled catalog + manual refresh, +38 tests
+- ✅ **Phase 12b** (Frontend Developer agent) — Settings shell + 6 sections + brew analytics, +8 tests
+- ✅ **Phase 12d** (Backend Architect agent) — paranoid mode + settings persistence + Network section, +18 tests
+- ✅ **Phase 12c + 12e** combined (Backend Architect agent) — GitHub anonymous tier + Device Flow + Keychain, +60 tests
+- ✅ Phase 13 plan written: `memory-bank/phase13-plan.md` — Tier A friendly names+summaries, Tier B use cases+similar+tags, AI Features master toggle, ~$20 cost, zero runtime LLM calls
+- ✅ Phase 14 (bundled cask icons) **explicitly DROPPED** — trademark/redistribution risk, runtime probe + paranoid gate is enough
+
+### Phases (updated)
+
+| Phase | Status |
+|-------|--------|
+| **Phase 12a — Bundled catalog + manual refresh** | ✅ |
+| **Phase 12b — Settings shell + brew analytics** | ✅ |
+| **Phase 12c — GitHub anonymous repo stats** | ✅ (combined with 12e) |
+| **Phase 12d — Paranoid + network settings + settings persistence** | ✅ |
+| **Phase 12e — Device Flow OAuth + Keychain** | ✅ (combined with 12c) |
+| **Phase 12f — GitHub authed actions** | next |
+| **Phase 13 — Catalog enrichment** | queued, can run parallel with 12f |
+| **Phase 14 — bundled cask icons** | DROPPED (trademark risk) |
+| **Phase 10 — Recipes** | deferred — depends on catalog (now available) |
+| **Phase 9d — installedAt + Last-Updated sort** | small standalone, not blocking |
+
+### Test + lint status (current)
+
+- `cargo test`: **334 passed / 0 failed / 6 ignored** (was 274 at start of Wave 2; 210 at start of session)
+- `cargo clippy --all-targets -- -D warnings`: clean
+- `npm run check`: 0 errors, 1 pre-existing tsconfig-node warning
+- `npm run build`: clean
+
+### Phase 12 Wave 2 notes
+
+**Wave 2 ordering (Option A — Foundation-first):** 12d → combined 12c+12e → 12f. Locked in by user. Reasoning: 12d delivers `require_network` helper + settings persistence; 12c+12e then consume the helper directly (no TODOs); combined as one Backend Architect pass because 12c and 12e both touch the same `src-tauri/src/github/` module.
+
+**Phase 12a key deviations from spec (accepted):**
+- `CatalogRefreshInProgress` returned as generic `InvalidArgument` until 12d added the proper variant — agent left a TODO grep-marker
+- Bundled gzipped catalog is 6.1 MiB not "~3 MiB" estimate (catalog grew upstream)
+- `fetch.py` doesn't strip unused JSON fields (deferred — would shrink to ~1 MiB at cost of build-time coupling to Rust struct shape)
+
+**Phase 12b key deviations (accepted):**
+- `commands/mod.rs` alphabetical position is true-alphabetical (brew_env < brewfile), not literal-spec position
+- Lucide has no `github` icon (trademark) → `git-fork` substituted for the GitHub section
+- Settings modal sized `220px nav + 1fr content` not `350px + 600px` (looked awkward at macOS density)
+- `brew_get_analytics` parser accepts both trailing-period and non-period forms (empirically brew has shipped both)
+- Activity caps wired to Settings but not yet consumed by activity store (deferred — value persists, no retroactive trim)
+
+**Phase 12d key deviations (accepted, more conservative than spec):**
+- Unknown enum variant → file treated as Corrupt → fail closed (instead of "log + substitute default"). Aligned with §12d "fail closed when corrupt" rule
+- `require_network` gates Trending even on cache hits (UX consistency over micro-savings)
+- Catalog stale banner threshold + cask icon mode NOT retroactively wired to consume the new settings — store is ready, consumers swap as a 1-line change later
+
+**Phase 12c+12e key deviations (accepted):**
+- Cache TTL backdating test rewritten as constant-pin + fresh-read positive test (filetime isn't a dep)
+- CSP comment moved to Rust module docs (tauri-build rejects unknown JSON fields like `_comment_csp`)
+- Custom `KeychainSlot` trait + in-memory mock instead of `keyring` crate's mock feature (same coverage, no runtime context switch)
+- Username resolution failure is non-fatal during sign-in (token still stored; username shows "github user" until next sign-in)
+- `AuthRequired` + `ScopeRequired` error variants land but `#[allow(dead_code)]` until 12f consumes them
+
+### Files staged (47 changes, ready to commit)
+
+Backend: `Cargo.toml`, `Cargo.lock`, `tauri.conf.json`, `capabilities/default.json`, `src/{catalog,github,util}/`, `src/commands/{catalog,brew_env,disk_usage,github,services,settings}.rs`, `src/commands/{mod,trending,cask_icon_homepage}.rs` (paranoid gate wiring), `src/{error,lib,state}.rs`
+
+Frontend: `src/{app.css, +layout, +page}.svelte`, `src/lib/{api,types}.ts`, `src/lib/components/{Dashboard, Discover, Library, PackageDetail, PackageRow, Services, Settings, SettingsSection*, DeviceFlowModal, Sidebar, Snapshots, Trending, ActivityHistory, SortableHeader}.svelte`, `src/lib/stores/{activity, categories, discover, github, library, services, settings, trending, ui}.svelte.ts`, `src/lib/util/categoryIcon.ts`
+
+Docs: README.md (Open by default → 7 paths + Paranoid Mode), BUILD.md (GitHub OAuth section), memory bank updates
+
+Data: `src-tauri/data/catalog/{formula,cask}.json.gz` + `manifest.json`
+
+Tools: `tools/catalog/{fetch.py,README.md}`
+
+Misc untracked: `PHILOSOPHY.md` (user-authored, 271 lines)

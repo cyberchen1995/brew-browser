@@ -24,15 +24,20 @@ import type {
   BrewfileSummary,
   BrewStreamEvent,
   CategoriesData,
+  DeviceFlowPoll,
+  DeviceFlowStart,
   DiskUsageReport,
+  GithubStatus,
   JobResult,
   OutdatedPackage,
   Package,
   PackageDetail,
   PackageKind,
   PackageList,
+  RepoStats,
   SearchResults,
   Service,
+  Settings,
   TrendingReport,
   TrendingWindow,
 } from "./types";
@@ -291,6 +296,137 @@ export function servicesStop(name: string): Promise<void> {
 
 export function servicesRestart(name: string): Promise<void> {
   return invoke<void>("services_restart", { name });
+}
+
+// ============================================================
+// Phase 12b — Settings (brew analytics + app version)
+// ============================================================
+
+/**
+ * Read the user's current Homebrew analytics posture.
+ *
+ * Shells `brew analytics state` and parses the first line of stdout.
+ * Throws `BrewErrorPayload` with `code === "internal"` if brew prints
+ * anything unrecognised (a defensive behaviour per the Phase 12 security
+ * review — we'd rather surface "unexpected output" than guess).
+ */
+export function brewGetAnalytics(): Promise<boolean> {
+  return invoke<boolean>("brew_get_analytics");
+}
+
+/**
+ * Set the user's Homebrew analytics posture. Takes the brew write lock
+ * because `brew analytics on|off` mutates global brew state.
+ */
+export function brewSetAnalytics(enabled: boolean): Promise<void> {
+  return invoke<void>("brew_set_analytics", { enabled });
+}
+
+/**
+ * App version string from `tauri::App::package_info()` — the source of
+ * truth is `Cargo.toml` (mirrored by `tauri.conf.json`). Cheaper and
+ * more honest than reading `package.json` from the renderer.
+ */
+export function appVersion(): Promise<string> {
+  return invoke<string>("app_version");
+}
+
+// ============================================================
+// Phase 12d — Settings persistence
+// ============================================================
+
+/**
+ * Read the currently-loaded settings.
+ *
+ * Throws a `BrewErrorPayload` with `code === "internal"` when the
+ * settings file on disk is unparseable — in that case the backend is
+ * already failing closed (`require_network` denies all outbound calls
+ * until the user resets). The Settings UI should catch the throw and
+ * show a "Settings file unreadable — Reset to defaults?" affordance
+ * that calls `settingsReset()`.
+ */
+export function settingsGet(): Promise<Settings> {
+  return invoke<Settings>("settings_get");
+}
+
+/**
+ * Persist a complete settings object. Returns the canonicalized
+ * settings (numerics clamped, etc.) so the caller can re-broadcast the
+ * authoritative values to the store.
+ */
+export function settingsSet(settings: Settings): Promise<Settings> {
+  return invoke<Settings>("settings_set", { settings });
+}
+
+/**
+ * Overwrite `settings.json` with defaults. Used by the "Reset to
+ * defaults" button in Settings → Network when the file is corrupt or
+ * the user wants to start fresh.
+ */
+export function settingsReset(): Promise<Settings> {
+  return invoke<Settings>("settings_reset");
+}
+
+// ============================================================
+// Phase 12c + 12e — GitHub integration
+// ============================================================
+
+/**
+ * Fetch repo stats for `homepage`. Returns `null` when:
+ * - The user hasn't enabled GitHub stats in Settings (the toggle
+ *   defaults off).
+ * - `homepage` doesn't parse as a `github.com/<owner>/<repo>` URL.
+ * - The repo returns 404.
+ *
+ * Throws `BrewErrorPayload` with `code === "paranoid_mode_blocked"`
+ * when paranoid mode is on (regardless of the GitHub toggle), or
+ * `"github_rate_limited"` when the anonymous 60/hr per-IP cap is hit.
+ *
+ * Backend handles its own 24h disk cache, so calling twice for the
+ * same homepage = cache hit on the backend.
+ */
+export function githubRepoStats(homepage: string): Promise<RepoStats | null> {
+  return invoke<RepoStats | null>("github_repo_stats", { homepage });
+}
+
+/**
+ * Read the current sign-in status. Reads from the macOS Keychain only —
+ * no network call. The DTO contains `{ signedIn, username, scopes }`,
+ * never the token. Callers should `loadStatus()` on mount + after each
+ * sign-in / sign-out.
+ */
+export function githubStatus(): Promise<GithubStatus> {
+  return invoke<GithubStatus>("github_status");
+}
+
+/**
+ * Begin a GitHub Device Flow sign-in. POSTs to
+ * `github.com/login/device/code` and returns the user code +
+ * verification URI to show in the DeviceFlowModal.
+ *
+ * Subject to the paranoid-mode gate — the sign-in handshake itself is
+ * outbound and gets blocked when "Block all outbound" is on.
+ */
+export function githubSigninStart(): Promise<DeviceFlowStart> {
+  return invoke<DeviceFlowStart>("github_signin_start");
+}
+
+/**
+ * Poll the token endpoint once with the opaque `deviceCode` returned
+ * by `githubSigninStart`. Returns a tagged union — caller drives the
+ * polling loop using the `interval` from the start response and
+ * doubles it on `slowDown` per RFC 8628 §3.5.
+ */
+export function githubSigninPoll(deviceCode: string): Promise<DeviceFlowPoll> {
+  return invoke<DeviceFlowPoll>("github_signin_poll", { deviceCode });
+}
+
+/**
+ * Delete the stored OAuth token (and cached username/scopes) from the
+ * macOS Keychain. Idempotent.
+ */
+export function githubSignout(): Promise<void> {
+  return invoke<void>("github_signout");
 }
 
 // ============================================================

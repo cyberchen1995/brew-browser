@@ -17,9 +17,11 @@ use tokio::sync::{oneshot, Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::brew::paths::resolve_brew_path;
+use crate::catalog::Catalog;
 use crate::commands::categories::CategoriesData;
 use crate::commands::disk_usage::CachedDiskUsage;
 use crate::commands::services::CachedServices;
+use crate::commands::settings::{self, SettingsLoadState};
 use crate::error::BrewError;
 use crate::trending::cache::TrendingCache;
 use crate::types::{BrewEnvironment, PackageList};
@@ -96,6 +98,26 @@ pub struct AppState {
     /// renders instantly after the first probe. Invalidated automatically
     /// by start/stop/restart so post-action lists are fresh.
     pub services_cache: Arc<Mutex<Option<CachedServices>>>,
+
+    /// Active catalog (Phase 12a). Outer `RwLock` lets `catalog_refresh`
+    /// swap the inner Arc atomically without blocking concurrent readers
+    /// beyond the brief moment they need to clone the Arc. Readers should
+    /// `read().await` and clone the Arc immediately; writers
+    /// (`catalog_refresh` only) take `write().await` and replace.
+    pub catalog: RwLock<Arc<Catalog>>,
+
+    /// Single-flight mutex for `catalog_refresh`. Held for the duration
+    /// of the refresh (network fetch + parse + write + swap). A second
+    /// click on Refresh while one is in flight returns
+    /// `BrewError::InvalidArgument` immediately rather than queueing.
+    pub catalog_refresh_in_flight: Arc<Mutex<()>>,
+
+    /// Persisted user settings (Phase 12d). Three-state container that
+    /// distinguishes file-absent (defaults apply) from file-corrupt
+    /// (fail closed — every outbound call denied until repaired).
+    /// `require_network` consults this on the first line of every
+    /// network-touching command.
+    pub settings: Arc<RwLock<SettingsLoadState>>,
 }
 
 impl AppState {
@@ -125,6 +147,41 @@ impl AppState {
         }
         let app_data_dir = resolve_app_data_dir()?;
 
+        // Load the bundled catalog synchronously — it's `include_bytes!`d
+        // so there's no I/O. A user-refreshed copy on disk, if present,
+        // is loaded in the background by `upgrade_catalog_from_user_data`
+        // so startup stays sync and never blocks on disk reads.
+        // `load_bundled` may fail only if the bundled snapshot is itself
+        // corrupt (would have failed at compile time), so we treat any
+        // failure here as fatal in dev and ship an empty catalog in
+        // release rather than refusing to launch.
+        let bundled = Catalog::load_bundled().unwrap_or_else(|e| {
+            tracing::error!(
+                "catalog: bundled snapshot failed to parse at startup ({}); serving empty catalog",
+                e
+            );
+            Catalog {
+                formulae: Default::default(),
+                casks: Default::default(),
+                as_of: String::new(),
+                source: crate::catalog::CatalogSource::Bundled,
+                formula_count: 0,
+                cask_count: 0,
+                corrupt: true,
+            }
+        });
+
+        // Load settings synchronously at startup. The loader handles
+        // file-absent (FirstLaunch → defaults), file-corrupt (Corrupt →
+        // fail closed in `require_network`), and good parse (Loaded(s)).
+        // Tracing warnings for corrupt cases happen inside the loader.
+        let settings_state = settings::load_at_startup(&app_data_dir);
+        if matches!(settings_state, SettingsLoadState::Corrupt { .. }) {
+            tracing::warn!(
+                "settings: load failed at startup; require_network will deny outbound calls until user resets"
+            );
+        }
+
         Ok(Self {
             brew_path: RwLock::new(brew_path),
             brew_env: RwLock::new(BrewEnvironment::default()),
@@ -138,7 +195,28 @@ impl AppState {
             categories_cache: Arc::new(Mutex::new(None)),
             disk_usage_cache: Arc::new(Mutex::new(None)),
             services_cache: Arc::new(Mutex::new(None)),
+            catalog: RwLock::new(Arc::new(bundled)),
+            catalog_refresh_in_flight: Arc::new(Mutex::new(())),
+            settings: Arc::new(RwLock::new(settings_state)),
         })
+    }
+
+    /// Async upgrade: if `<app_data_dir>/catalog/` holds a complete
+    /// user-refreshed copy, swap the in-state catalog Arc to it. Called
+    /// once at startup from `initialize` (spawned on a tokio task so it
+    /// doesn't block the setup hook). Quietly does nothing when there
+    /// is no user-refreshed copy. Corrupt user-data is cleaned up by
+    /// [`Catalog::resolve_active`] which we call instead of
+    /// `load_user_data` directly.
+    pub async fn upgrade_catalog_from_user_data(&self) {
+        // `resolve_active` returns user-data if good, else bundled. We
+        // only swap when the result is actually user-refreshed — bundled
+        // is what we started with.
+        let resolved = Catalog::resolve_active(&self.app_data_dir).await;
+        if resolved.source == crate::catalog::CatalogSource::UserRefreshed {
+            let mut guard = self.catalog.write().await;
+            *guard = Arc::new(resolved);
+        }
     }
 
     /// Invalidate caches that depend on filesystem / brew state.
@@ -155,6 +233,32 @@ impl AppState {
             .await
             .clone()
             .ok_or(BrewError::BrewNotFound)
+    }
+
+    /// Consult paranoid mode + settings load state. Returns `Ok(())` if
+    /// the outbound call is allowed, or `BrewError::ParanoidModeBlocked`
+    /// otherwise. **Every outbound command must call this as its first
+    /// line** — see the security review §12d "Cross-cutting concerns".
+    ///
+    /// Three cases:
+    /// - `Loaded(s)` with `paranoid_mode == false` → allow.
+    /// - `FirstLaunch` → allow (defaults apply, paranoid OFF — preserves
+    ///   the v0.1.0 behaviour for users with no settings file yet).
+    /// - `Loaded(s)` with `paranoid_mode == true` OR `Corrupt(...)` →
+    ///   deny. Corrupt is a deliberate fail-closed: we don't know what
+    ///   the user wanted, so we don't make outbound calls until they
+    ///   repair the file (or hit Reset to defaults in the UI).
+    pub async fn require_network(&self, feature: &'static str) -> Result<(), BrewError> {
+        let guard = self.settings.read().await;
+        match &*guard {
+            SettingsLoadState::Loaded(s) if !s.paranoid_mode => Ok(()),
+            SettingsLoadState::FirstLaunch => Ok(()),
+            SettingsLoadState::Loaded(_) | SettingsLoadState::Corrupt { .. } => {
+                Err(BrewError::ParanoidModeBlocked {
+                    feature: feature.to_string(),
+                })
+            }
+        }
     }
 }
 
@@ -191,12 +295,116 @@ fn resolve_app_data_dir() -> Result<PathBuf, BrewError> {
     Ok(base)
 }
 
-/// Tauri setup hook — instantiates and manages `AppState`.
+/// Tauri setup hook — instantiates and manages `AppState`. After the
+/// state is built (with the bundled catalog loaded synchronously),
+/// kicks off a background task that upgrades to the user-refreshed
+/// catalog if one is on disk.
 pub fn initialize<R: tauri::Runtime>(
     app: &mut tauri::App<R>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::Manager;
     let state = AppState::build()?;
     app.manage(state);
+
+    // Spawn the catalog upgrade. The handle is registered above, so
+    // pulling it out of `app.state()` here gives us the same Arc-shared
+    // value the commands will see.
+    let app_handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        let state: tauri::State<AppState> = app_handle.state();
+        state.upgrade_catalog_from_user_data().await;
+    });
+
     Ok(())
+}
+
+// ---------- Tests ----------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::settings::Settings;
+
+    /// Build a minimal AppState whose only meaningful field is `settings`.
+    /// All other fields use whatever `AppState::build` resolves — for the
+    /// gate-only tests below the brew-path lookup, catalog load, etc., are
+    /// irrelevant. Settings slot is overwritten *after* construction so we
+    /// don't depend on whatever happens to be on disk for the test user.
+    async fn build_state_with(slot: SettingsLoadState) -> AppState {
+        let state = AppState::build().expect("AppState::build");
+        {
+            let mut guard = state.settings.write().await;
+            *guard = slot;
+        }
+        state
+    }
+
+    #[tokio::test]
+    async fn require_network_allows_first_launch() {
+        let state = build_state_with(SettingsLoadState::FirstLaunch).await;
+        assert!(state.require_network("trending_fetch").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn require_network_allows_loaded_with_paranoid_off() {
+        let s = Settings {
+            paranoid_mode: false,
+            ..Settings::default()
+        };
+        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
+        assert!(state.require_network("catalog_refresh").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn require_network_blocks_when_paranoid_on() {
+        let s = Settings {
+            paranoid_mode: true,
+            ..Settings::default()
+        };
+        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
+        let r = state.require_network("trending_fetch").await;
+        match r {
+            Err(BrewError::ParanoidModeBlocked { feature }) => {
+                assert_eq!(feature, "trending_fetch");
+            }
+            other => panic!("expected ParanoidModeBlocked, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn require_network_blocks_when_corrupt() {
+        // Fail-closed: corrupt settings file → deny even though paranoid
+        // would default false. This is the load-bearing security gate from
+        // the §12d review.
+        let state = build_state_with(SettingsLoadState::Corrupt {
+            message: "bad json".into(),
+        })
+        .await;
+        let r = state.require_network("cask_icon_from_homepage").await;
+        match r {
+            Err(BrewError::ParanoidModeBlocked { feature }) => {
+                assert_eq!(feature, "cask_icon_from_homepage");
+            }
+            other => panic!("expected ParanoidModeBlocked from corrupt, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn require_network_feature_string_round_trips() {
+        // The static-str argument must be carried verbatim into the error
+        // so the frontend can route the toast to the right setting.
+        let state = build_state_with(SettingsLoadState::Corrupt {
+            message: "x".into(),
+        })
+        .await;
+        for feat in ["trending_fetch", "cask_icon_from_homepage", "catalog_refresh"] {
+            let r = state.require_network(feat).await;
+            match r {
+                Err(BrewError::ParanoidModeBlocked { feature }) => {
+                    assert_eq!(feature, feat);
+                }
+                other => panic!("expected block for {feat}, got {other:?}"),
+            }
+        }
+    }
 }

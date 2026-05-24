@@ -95,6 +95,32 @@ The **app-specific password** is a credential. It can be regenerated easily, but
 
 If you ever do commit it by accident: regenerate at appleid.apple.com immediately. The old password is invalidated on regenerate.
 
+## GitHub OAuth App (one-time setup before release)
+
+brew-browser's GitHub integration uses the OAuth Device Flow (RFC 8628). The `client_id` is hardcoded in `src-tauri/src/github/auth.rs` and is **not a secret** — Device Flow client IDs are identifiers, not credentials (§3.1 of the RFC).
+
+A placeholder `client_id` ships with the source tree (`Iv1.PLACEHOLDER_REPLACE_BEFORE_RELEASE`). The placeholder will fail loudly on the first sign-in attempt; you must replace it with a real GitHub App's `client_id` before publishing a release build.
+
+### One-time steps
+
+1. Visit <https://github.com/settings/apps> and click **New GitHub App**.
+2. Fill in:
+   - **Name:** `brew-browser` (or your fork's name)
+   - **Homepage URL:** `https://brew-browser.zerologic.com` (or your project's URL)
+   - **Callback URL:** leave blank — Device Flow doesn't need one.
+   - **Webhook:** uncheck "Active" — we don't receive any.
+3. In the **Device Flow** section, check **Enable Device Flow**.
+4. In **Permissions**, grant the absolute minimum:
+   - **Repository permissions** → **Metadata:** Read-only (required for any auth).
+   - Anything else needed by Phase 12f (issues, stars) — refer to the spec when that wave lands.
+5. Submit. GitHub shows the new app's `Client ID` (a string like `Iv23licABCXYZ123`).
+6. Open `src-tauri/src/github/auth.rs` and replace the value of the `GITHUB_OAUTH_CLIENT_ID` constant.
+7. **Do NOT** generate a client secret — Device Flow doesn't use one.
+
+### Forking
+
+If you fork brew-browser, repeat the steps above against your own GitHub account. Don't reuse the upstream `client_id` — it ties any sign-in attempts (and the resulting rate-limit consumption) back to the upstream maintainer's OAuth app.
+
 ## Unsigned builds (for testing only)
 
 If you just want to test the build pipeline without notarization:

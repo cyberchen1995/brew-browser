@@ -13,6 +13,8 @@
   import ResizeHandle from "$lib/components/ResizeHandle.svelte";
   import ActivityDrawer from "$lib/components/ActivityDrawer.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
+  import Settings from "$lib/components/Settings.svelte";
+  import DeviceFlowModal from "$lib/components/DeviceFlowModal.svelte";
   import Toast from "$lib/components/Toast.svelte";
 
   import { ui } from "$lib/stores/ui.svelte";
@@ -43,6 +45,13 @@
     if (meta && e.key.toLowerCase() === "k") {
       e.preventDefault();
       ui.openPalette();
+      return;
+    }
+
+    // Cmd+, : open Settings (macOS preferences convention)
+    if (meta && e.key === ",") {
+      e.preventDefault();
+      ui.openSettings();
       return;
     }
 
@@ -93,8 +102,12 @@
       return;
     }
 
-    // Esc: priority: palette → modal (handled in Modal) → detail
+    // Esc: priority: settings (handles its own Esc) → palette → modal → detail.
+    // Settings.svelte handles its own Esc listener with stopPropagation, so
+    // we never reach this branch while Settings is open. Belt-and-suspenders
+    // gate kept to make the priority intent obvious.
     if (e.key === "Escape") {
+      if (ui.settingsOpen) return; // Settings handles its own Esc
       if (ui.paletteOpen) { ui.closePalette(); return; }
       if (ui.selectedPackage) { ui.closeDetail(); return; }
     }
@@ -171,6 +184,8 @@
   </div>
   <ActivityDrawer />
   <CommandPalette />
+  <Settings />
+  <DeviceFlowModal />
   <Toast />
 </div>
 

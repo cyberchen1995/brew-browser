@@ -17,13 +17,15 @@ Homebrew is the standard package manager on macOS. brew-browser gives it a real 
 
 ## Features
 
-- **Library** — every installed formula and cask in one dense, filterable list, with outdated badges and a slide-over detail panel
-- **Discover** — search the full Homebrew package index and install straight from the result row
-- **Trending** — top packages from Homebrew's published `formulae.brew.sh` analytics, with 30 / 90 / 365-day windows
+- **Dashboard** — your Homebrew setup at a glance: installed count, updates available, brew version, formula/cask split, top-categories donut chart, storage usage (Cellar / Caskroom / var/log / cache) with one-click "Reveal in Finder"
+- **Library** — every installed formula and cask in one dense, filterable list, with outdated badges, sortable columns, category chip filters, and a slide-over detail panel
+- **Discover** — search the full Homebrew catalog (15,974 packages, bundled at build time + user-refreshable) by name or browse via the 19-category tile grid; multi-select chip filter
+- **Trending** — top packages from Homebrew's published `formulae.brew.sh` analytics, with 30 / 90 / 365-day windows and sortable columns
 - **Snapshots** — save and restore Brewfiles using Homebrew's own `brew bundle` mechanism; "set up a new Mac" in one click
-- **Activity** — every `brew` invocation streams live into a bottom drawer with full stdout, stderr, and a session history
+- **Services** — list, start, stop, and restart background services managed by launchd through `brew services`
+- **Activity** — every `brew` invocation streams live into a bottom drawer with full stdout/stderr; session history persists across launches (last 50 jobs, capped lines)
 
-A global Cmd+K command palette covers the verbs. Cmd+1…5 jumps between sections.
+A global Cmd+K command palette covers the verbs. Cmd+0 returns to the Dashboard; Cmd+1…6 jumps between sections. Cmd+, opens Settings. Click the 🍺 brand to return home. Window dragging works from any panel header (native macOS overlay title bar + NSVisualEffectView vibrancy).
 
 ## What this isn't
 
@@ -66,12 +68,17 @@ A Tauri 2 shell hosts a SvelteKit + Svelte 5 frontend in the system WebView. A R
 
 **MIT licensed.** **No CLA.** **No EULA.** **No telemetry.** **No account.** **No dark patterns.**
 
-brew-browser makes outbound network calls in exactly four documented circumstances. Every one is initiated by something you did:
+brew-browser makes outbound network calls in exactly seven documented circumstances. Every one is initiated by something you did and gated by Settings → Network:
 
-- **`https://formulae.brew.sh`** — fetched when you open the Trending tab. Cached in process memory for one hour. Uses Homebrew's own published install-analytics JSON; no API key, no account.
-- **Cask homepage probes** — when the Discover or Trending tab renders an uninstalled cask that has a `homepage` field, the Rust backend probes that homepage for an icon (in order: `/apple-touch-icon.png`, `<meta og:image>` parsed from the homepage HTML, `/favicon.ico`). One probe per cask per week max — the result, including misses, is cached for 7 days. These probes are sandboxed: link-local, loopback, RFC1918, and cloud-metadata IPs are rejected before the request, and the same check runs again on every redirect hop to prevent SSRF.
+- **`https://formulae.brew.sh/api/analytics`** — fetched when you open the Trending tab. Cached in process memory (TTL configurable in Settings → Network; default 60 minutes). Uses Homebrew's own published install-analytics JSON; no API key, no account.
+- **`https://formulae.brew.sh/api/{formula,cask}.json`** — the full Homebrew catalog. Bundled at build time so the app works offline. A user-initiated **Refresh** button on the Dashboard (or the Discover stale-catalog banner) writes a fresh copy to `~/Library/Application Support/brew-browser/catalog/`. Auto-refresh is **off** by default; Settings → Network offers weekly / daily opt-in.
+- **Cask homepage probes** — when the Discover or Trending tab renders an uninstalled cask that has a `homepage` field, the Rust backend probes that homepage for an icon (in order: `/apple-touch-icon.png`, `<meta og:image>` parsed from the homepage HTML, `/favicon.ico`). One probe per cask per week max — the result, including misses, is cached for 7 days. These probes are sandboxed: link-local, loopback, RFC1918, and cloud-metadata IPs are rejected before the request, and the same check runs again on every redirect hop to prevent SSRF. Settings → Network can scope this to **installed only** or disable it entirely.
+- **`https://api.github.com/repos/{owner}/{repo}`** — optional, **off by default**. When **Settings → GitHub → "Show GitHub stats on package pages"** is on, the PackageDetail panel fetches public repo metadata (stars, forks, last release date, archived state) for packages whose homepage parses as a GitHub URL. The URL parser strictly allowlists `github.com` (rejects `gist.`, `raw.githubusercontent.`, suffix-attack domains, path traversal). Results cached to `~/Library/Application Support/brew-browser/github-cache/` for 24 hours. Anonymous rate limit is 60 reqs/hr per IP; sign-in lifts it to 5,000/hr.
+- **`https://github.com/login/{device,oauth}/*`** — optional, only when you click **Sign in with GitHub** in Settings. Uses OAuth Device Flow (RFC 8628): you see a user code, open `github.com/login/device` in your browser, paste it, done. No embedded webview, no client secret, no callback URL. Scopes requested: `read:user` + `public_repo` (the minimum for username + star/issue/watch). Access token stored exclusively in **macOS Keychain** under `dev.openbrew.browser/github_access_token`. **The token is never returned to the frontend, never written to disk, and never logged** — verified by unit tests.
 - **`brew` itself** — every install, uninstall, upgrade, search, and snapshot shells out to the real `brew` CLI. Whatever network calls `brew` makes (GitHub, OCI registries, bottle mirrors) happen exactly as they would if you ran the command yourself in a terminal. The full stdout/stderr stream is visible in the Activity drawer.
 - **Your default browser** — when you click the homepage button on a package, the URL is opened in your default browser via macOS `open(1)`. The app rejects any non-`http(s)` scheme before opening.
+
+Every outbound call respects the Network settings — set **Paranoid Mode** in Settings to block all outbound traffic in one click. Settings persist to `~/Library/Application Support/brew-browser/settings.json`; a corrupt or missing file fails closed (paranoid effectively on) until you hit Reset to defaults.
 
 No analytics. No crash reporting. No third-party fonts or pixels. No `fetch()` from the frontend — every backend call goes through typed Tauri IPC.
 

@@ -1,48 +1,33 @@
 # NEXT-SESSION handoff — read this first
 
-**Date written:** 2026-05-24 (late session, post-Phase-11)
+**Date written:** 2026-05-24 (end-of-session, Phase 12 Wave 2 complete)
 **Session lead:** Claude Opus 4.7 (1M context) with Michael
 
-If you're a fresh session (or future-me after a /compact), read this first, then `activeContext.md`, then `progress.md`, then `phase12-plan.md`. They tell you everything that's been built. This file just tells you where we are and what's next.
+If you're a fresh session (or future-me after /compact), read this first, then `activeContext.md`, `progress.md`, `phase12-plan.md`, `phase13-plan.md`, `scans/phase12-security-review.md`.
 
 ---
 
-## Current state (2026-05-24)
+## Current state
 
-- **v0.1.0 released** — signed/notarized .dmg live at <https://github.com/msitarzewski/brew-browser/releases/tag/v0.1.0>
-- **Phase 9 + Phase 11 fully landed** in working tree, **committed** in commit cluster following this update
-- 210 tests passing, clippy clean with `-D warnings`, frontend type-check clean
-- App now has: Dashboard (default landing), Services, Storage view, donut chart, category links everywhere, native vibrancy, Activity persistence, sortable lists
+- **v0.1.0 released** — signed/notarized .dmg at <https://github.com/msitarzewski/brew-browser/releases/tag/v0.1.0>
+- **All of Phase 9, 11, 12a, 12b, 12c, 12d, 12e shipped** this session
+- **334 tests passing**, clippy clean with `-D warnings`, npm check clean, npm build clean
+- **Commit cluster `b`-then-c**: Wave 1 + Wave 2 (47 files) committed in commit `{TBD-after-push}` — single big commit so the next agent waves start from a clean baseline
 
-## What's next: Phase 12
+## What's queued
 
-See `memory-bank/phase12-plan.md` for the full task graph. Three waves of parallel agent work:
+- **Phase 12f** — GitHub authed actions (star/unstar/is_starred/watch/unwatch/create_issue + "Wrong?" issue-deeplink + Dashboard personal-stats card). Backend Architect + Frontend Developer pass. AuthRequired/ScopeRequired error variants already exist; parse_github_url validator + Token retrieval helpers already in place. Spec in `phase12-plan.md` §12f.
+- **Phase 13** — Catalog enrichment via Haiku. Tier A friendly names + summaries first (~$5), then Tier B use cases + similar + tags (~$15). Single "Show AI-enriched data" master toggle in Settings → Appearance. Zero runtime LLM calls — all enrichment baked at build time. Spec in `phase13-plan.md`. Can run parallel with 12f (different domains).
+- **Phase 10** — Recipes. Paused. Depends on catalog (now available so unblocked).
 
-**Wave 1 (parallel):**
-- 12a — Bundled catalog + manual refresh (Backend Architect)
-- 12b — Settings shell (Frontend Developer)
+## What was explicitly DROPPED
 
-**Wave 2 (parallel, after Wave 1):**
-- 12c backend — GitHub anonymous repo stats (Backend Architect)
-- 12c+12d frontend — GitHub stats in PackageDetail + Settings network controls + paranoid mode (Frontend Developer)
-- 12e — GitHub Device Flow + Keychain (Backend Architect)
+- **Phase 14 — bundled cask icons.** Trademark/redistribution risk for ~7,600 vendor icons. Runtime probe + paranoid gate is sufficient. See `decisions.md` for the full reasoning.
 
-**Wave 3 (after Wave 2):**
-- 12f — GitHub authed actions: star/issue/watch + Wrong? + Dashboard personal stats (Frontend Developer)
+## Critical context for any release
 
-**Concurrent across waves:**
-- Security Engineer: review network surface, paranoid-mode gates, Keychain perms
-- Technical Writer: README + memory bank updates as each wave lands
-- Code Reviewer: final pass before each commit
-
-## Open items not in Phase 12
-
-- Recipes (Phase 10) — paused; depends on catalog so Phase 13+
-- `installedAt` on Package + Last-Updated sort — small standalone backend addition
-- Tier B Tahoe Liquid Glass (Swift bridge) — v0.2
-- Real screenshots per `visualStory.md`
-- Categorize cron on Beast or umbp
-- "Wrong?" GitHub issue link — folded into 12f as the in-app/deeplink dual mode
+- **`GITHUB_OAUTH_CLIENT_ID` is a placeholder** in `src-tauri/src/github/auth.rs`. Sign-in flow will fail until swapped. Procedure documented in `BUILD.md` § "GitHub OAuth App (one-time setup before release)". 7 steps, ~10 minutes on github.com/settings/apps with "Device Flow enabled" checkbox.
+- Phase 12c anonymous tier works without a client_id — only sign-in needs one. Releases can ship 12c without 12e if 12e isn't reconfigured.
 
 ## Credentials / paths reference
 
@@ -50,19 +35,34 @@ See `memory-bank/phase12-plan.md` for the full task graph. Three waves of parall
 |------|-------|
 | Repo on disk | `/Users/michael/Clean/brew-browser/` |
 | GitHub repo | `github.com/msitarzewski/brew-browser` |
-| Anthropic API key (categorize tool) | `tools/categorize/.env` (gitignored) |
+| Anthropic API key (categorize + enrich tools) | `tools/categorize/.env` (gitignored, local only) |
 | Apple signing env | `~/.config/brew-browser/signing.env` (chmod 600, outside repo) |
-| Signed .dmg artifact | `src-tauri/target/release/bundle/dmg/brew-browser_0.1.0_aarch64.dmg` |
+| Signed .dmg artifact (v0.1.0) | `src-tauri/target/release/bundle/dmg/brew-browser_0.1.0_aarch64.dmg` |
 | Landing page | `brew-browser.zerologic.com` (Caddy on umbp, user-managed) |
 | umbp Tailnet IP | `100.98.187.7` |
+| Catalog data | `src-tauri/data/catalog/{formula,cask}.json.gz` + `manifest.json` |
+| Catalog refresh script | `python tools/catalog/fetch.py` — uses stdlib only |
+| GitHub disk cache (runtime) | `~/Library/Application Support/brew-browser/github-cache/<owner>__<repo>.json` |
+| Settings persistence (runtime) | `~/Library/Application Support/brew-browser/settings.json` (atomic write + 1 MiB cap + corrupt-fail-closed) |
+| Keychain (runtime) | service `dev.openbrew.browser`, account `github_access_token` (+ `_scopes`) |
 
-## Phase 12 setup notes
+## Phase 13 setup (when ready)
 
-- **Phase 12a — catalog fetch:** before first run, execute `python tools/catalog/fetch.py` to download `formula.json` + `cask.json`, gzip them, write to `src-tauri/data/catalog/`. ~10 MB raw, ~3 MB gzipped.
-- **Phase 12e — GitHub OAuth:** user (Michael) must create a GitHub OAuth App with Device Flow enabled. Get the `client_id`, commit it in source (Device Flow client_ids aren't secret). Without this, the sign-in flow won't work — but everything else still works (anonymous tier from 12c is the default).
+1. Verify Phase 12 is fully shipped + committed (Phase 12f done)
+2. Read `phase13-plan.md` — Wave structure: parallel build script + frontend store, then PackageDetail rendering, then cron deployment + docs
+3. Launch agent waves per the plan
+4. The categorize tool's `.env` and pattern can be reused as the model for `tools/enrich/`
 
-## Security note (still valid from previous session)
+## Security posture (current verdict)
 
-The Anthropic API key in `tools/categorize/.env` and the app-specific Apple password in `~/.config/brew-browser/signing.env` are valid and live. If this conversation transcript is ever shared publicly, both should be regenerated:
-- Anthropic: console.anthropic.com → API keys
-- Apple: appleid.apple.com → Sign-In and Security → App-Specific Passwords
+**READY-FOR-SCRUTINY** maintained throughout Phase 12. The `scans/phase12-security-review.md` mandatory-before-merge checklist was wired into every agent's prompt and verified before each completion. Updates needed in `security.md` § "Phase 12 additions" — list of recommended additions is in the review doc. Technical Writer pass can land these in a follow-up.
+
+## Open security checkpoints for next session
+
+- Run a fresh `cargo audit` + `cargo deny check` + `npm audit --omit=dev` after the next commit cluster — verify no new advisories from the new `keyring`, `url`, `flate2` deps
+- Confirm `clippy::print_*` / `clippy::dbg_macro` deny attribute is enforced in `src-tauri/src/github/{auth,stats}.rs` (sanity grep)
+- Decide whether `AppState::upgrade_catalog_from_user_data` (Phase 12a startup hook) should consult `require_network` — currently it doesn't (read-only disk access, no network), but a defense-in-depth argument exists
+
+## Note: PHILOSOPHY.md
+
+User added `PHILOSOPHY.md` at repo root during the session (271 lines, project manifesto in the same voice as the rest of the docs). Included in the Wave 1+2 commit cluster.

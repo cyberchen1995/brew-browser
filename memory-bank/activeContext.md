@@ -1,135 +1,91 @@
 # Active Context
 
-**Date:** 2026-05-24 (post-session 2026-05-24-night)
-**State:** **v0.1.0 SHIPPED.** Phase 9 + Phase 11 (Dashboard, Services, Disk Usage) **landed in working tree, not yet committed.**
+**Date:** 2026-05-24 (end-of-session 2026-05-24-night, post-Phase-12 Wave 2)
+**State:** Phases 9, 11, 12a, 12b, 12c, 12d, 12e all landed in working tree. 334 tests passing. Only Phase 12f (GitHub authed actions) + Phase 13 (catalog enrichment) remain in the current plan.
 
 ## Repo
 
 - **github.com/msitarzewski/brew-browser** — public, MIT, `main` branch
-- **Release:** v0.1.0 live at <https://github.com/msitarzewski/brew-browser/releases/tag/v0.1.0> — signed/notarized `brew-browser_0.1.0_aarch64.dmg` (5.7 MB, sha256 `92a35fec95f20216ce216969f35f2445d180ea1bb0b08b1aaa80a6e0def3d31b`)
-- 5 commits to date (sixth pending):
-  - `653e26f` feat: initial release — brew-browser v0.1.0 (186 files)
+- **Release:** v0.1.0 at <https://github.com/msitarzewski/brew-browser/releases/tag/v0.1.0> — signed/notarized `brew-browser_0.1.0_aarch64.dmg`
+- 6 commits to date (next commit cluster pending — Wave 1 + Wave 2):
+  - `653e26f` feat: initial release — brew-browser v0.1.0
   - `c72e31d` data: initial LLM-generated package categories + landing page
-  - `2dad9be` landing: drop Caddyfile snippet, defer config to manual
+  - `2dad9be` landing: drop Caddyfile snippet
   - `cb60e4a` build: signed + notarized release pipeline
   - `c2ab41f` memory-bank: NEXT-SESSION handoff doc
+  - `84ad010` feat: Phase 9 + 11 — Dashboard, Services, donut, category linking, native vibrancy
 
-## What landed in this session (uncommitted)
+## Working tree this session (post-Phase-11 commit `84ad010`)
 
-### Phase 9a — Discover category tile UI
-- `commands/categories.rs` Tauri command + memoised parse, JSON via `include_str!`
-- `stores/categories.svelte.ts` with `tiles`, `tokensInCategory`, `categoriesOf` helpers
-- `util/categoryIcon.ts` static map for 19 Lucide icons
-- Discover.svelte tile grid (sorted by count, uncategorized last)
-- 1 new unit test
+### Phase 12a — Bundled catalog + manual refresh ✅
+- `tools/catalog/fetch.py` + README
+- `src-tauri/data/catalog/{formula,cask}.json.gz` + `manifest.json` (6.1 MiB bundled, 8,369 formulae + 7,659 casks as of 2026-05-24T07:59:56Z)
+- `src-tauri/src/catalog/mod.rs` — `Catalog`, `Formula`, `Cask`, `Manifest`, `CatalogSource`; size caps (64 MiB raw / 128 MiB decompressed / 4 KiB per field / 200 char names); `load_bundled`/`load_user_data`/`resolve_active`/`write_user_data`; custom deserializers for `license` and `versions.stable`; corrupt-recovery cleanup
+- `src-tauri/src/commands/catalog.rs` — 6 commands: `catalog_summary`/`catalog_refresh`/`catalog_lookup_formula`/`catalog_lookup_cask`/`catalog_formulae_summary`/`catalog_casks_summary`. Single-flight refresh via `try_lock`; 60s reqwest timeout; streaming fetch_capped with 64 MiB cap; gzip then atomic write; post-write reload before swap
+- `src-tauri/src/util/{mod,fs}.rs` — `atomic_write` (temp + fsync + rename + fsync parent) and `read_capped` (errors on oversize, doesn't truncate). Shared chokepoints used by 12c + 12d
+- AppState additions: `catalog: RwLock<Arc<Catalog>>`, `catalog_refresh_in_flight: Arc<Mutex<()>>`. Sync bundled load in `build()`, async upgrade from user-data spawned at startup
+- `flate2 = "1"` added
+- +38 tests (210 → 248)
 
-### Phase 9b — Category linking everywhere
-- `stores/discover.svelte.ts` — multi-select `selectedCategories: Set<string>`
-- Discover.svelte multi-select chip bar (works on search results AND chip-only browse)
-- PackageDetail.svelte — Categories meta row with clickable pills → jump to filtered Discover
-- Fixed dangling `installed` pill (row layout split into with-desc / no-desc grids)
-- `SortableHeader.svelte` new reusable component
-- Library: sortable Name / Version / Type / Outdated + shared category chip filter
-- Trending: sortable # / Name / Type / Installs (installs defaults desc)
-- Trending Refresh now actually busts the backend cache (`force` flag honoured)
-- Fixed list-column shift bug: `1fr` → `minmax(0, 1fr)` everywhere (Discover, Library header, PackageRow, Trending), AND `auto` → `90px` for installed col
+### Phase 12b — Settings shell + brew analytics ✅
+- `src-tauri/src/commands/brew_env.rs` — `brew_get_analytics` (strict first-line parser), `brew_set_analytics`, `app_version`. Parser extracted as private fn + 8 tests
+- `src/lib/components/Settings.svelte` — modal with left-nav, focus trap, Esc + click-outside-to-close, gear-icon trigger, Cmd+, shortcut
+- 6 section components: `SettingsSectionAppearance`, `SettingsSectionNetwork`, `SettingsSectionGitHub`, `SettingsSectionBrew`, `SettingsSectionActivity`, `SettingsSectionAbout`
+- `src/lib/stores/ui.svelte.ts` — added `settingsOpen`, `defaultSection`, `vibrancyMaterial`, `confirmDestructive`, `activityMaxJobs`, `activityMaxLines` with persistence + clamp validators
+- `src/lib/api.ts` — `brewGetAnalytics`, `brewSetAnalytics`, `appVersion` wrappers
+- Sidebar gear icon next to theme controls
+- +8 tests (248 → 256)
 
-### Phase 11 — Dashboard (home view)
-- `stores/library.svelte.ts` — Library filter lifted into a store so Dashboard can preset it
-- Dashboard.svelte — hero (installed / outdated / brew version) + Updates panel with one-click "Upgrade all" + Composition split + Top-Categories donut chart + Storage card
-- Donut: 19-cat palette, top 8 + "Other", center total, clickable legend → Discover
-- Storage: 4 paths (Cellar / Caskroom / var/log / Download cache) with `du -sk` in parallel, Open-in-Finder button per row
-- Backend: `commands/disk_usage.rs` — `disk_usage`, `disk_usage_clear_cache`, `open_in_finder`; gates Finder reveal to inside Homebrew prefix/cache only
-- `tokio::join!` parallel du, 60s cache, `chrono` timestamp
-- 2 new tests
+### Phase 12d — Paranoid mode + network settings + settings persistence ✅
+- `src-tauri/src/commands/settings.rs` — `Settings` struct, `CatalogAutoRefresh`/`CaskIconMode` enums, `SettingsLoadState { FirstLaunch | Loaded(Settings) | Corrupt(...) }`, `settings_get`/`settings_set`/`settings_reset` commands, `load_at_startup` sync loader, `persist` writer using `atomic_write`
+- `state.rs` — `settings: Arc<RwLock<SettingsLoadState>>` field, `require_network(feature)` method (fail-closed on Corrupt, ok on FirstLaunch + Loaded-and-paranoid-off)
+- `error.rs` — `ParanoidModeBlocked { feature: String }` variant
+- Wired `require_network` into `trending_fetch`, `cask_icon_from_homepage`, `catalog_refresh` as first line of each command
+- `src/lib/stores/settings.svelte.ts` — Settings store with `data`/`loading`/`error`/`corruptOnDisk` + `load`/`save`/`reset`
+- `SettingsSectionNetwork.svelte` rewritten with Paranoid Mode toggle + warning callout, Catalog auto-refresh radios, stale-banner threshold, Cask icon mode radios, Trending TTL, dynamic disclosure list with allowed/blocked indicators, corrupt-file recovery UI with [Reset to defaults]
+- `paranoid_mode_blocked` added to `BrewErrorPayload`
+- README "Open by default" updated for 5 paths + Paranoid Mode + corrupt-file fail-closed
+- +18 tests (256 → 274)
 
-### Phase 11b — Services
-- `commands/services.rs` — list / clear-cache / start / stop / restart commands
-- 5s list cache; auto-invalidated after every action; write-lock around state mutations
-- Service-name validation (alphanumeric + `-_+@.`, ≤128 chars) as defense-in-depth
-- `stores/services.svelte.ts` with `byName`, `isPending`, `act(name, action)`
-- Services.svelte page — sortable Name/Status/User columns + per-row Start/Stop/Restart
-- Sidebar 6th item ⌘5 (Activity moves to ⌘6); badge = running-services count
-- PackageDetail.svelte — Service card with pill + 3 action buttons when formula has a services entry
-- Bootstrap priming in +layout.svelte so sidebar badge populates first paint
-- 3 new tests
-
-### Phase 11c — Native macOS feel
-- `tauri.conf.json` — `transparent: true`, `titleBarStyle: "Overlay"`, `hiddenTitle: true`
-- `Cargo.toml` — `window-vibrancy = "0.6"` (macOS-only target dep)
-- `lib.rs` — `apply_vibrancy(window, NSVisualEffectMaterial::HudWindow, …)` in setup
-- `app.css` — body background transparent so the vibrancy shows through
-- Capability: `core:window:allow-start-dragging` added to default.json
-- `data-tauri-drag-region` on sidebar brand wrap + every panel-head; `="false"` on header buttons that opt out
-- Brand area is now a button: click → Dashboard (Cmd+0); hover/active states wired
-
-### Phase 11d — Activity persistence
-- `stores/activity.svelte.ts` mirrors completed jobs to localStorage (`brew-browser:activity:v1`)
-- Cap 50 jobs, 500 lines/job; debounced writes (400ms) + immediate flush on terminal events
-- `hydrate()` on +layout.svelte mount; restored "running" jobs reclassify to "canceled"
-
-### Dashboard polish (mid-session fixes)
-- Fixed card-clipping + scroll: `.body > * { flex-shrink: 0 }` so flex children keep natural height instead of getting squashed
-- Donut replaces broken bar chart (track/fill color collision in dark mode)
-- Updates card title is a clickable link → Library with `outdated` filter pre-selected
-- "+ N more in Library →" goes there too
-- Hero "updates available" stat goes there too
-
-### README update (uncommitted)
-- Install section now points to the live v0.1.0 release page instead of "coming soon: brew tap"
-
-## File deltas this session
-
-**Created (12 files):**
-- `src-tauri/src/commands/categories.rs`
-- `src-tauri/src/commands/disk_usage.rs`
-- `src-tauri/src/commands/services.rs`
-- `src/lib/components/Dashboard.svelte`
-- `src/lib/components/Services.svelte`
-- `src/lib/components/SortableHeader.svelte`
-- `src/lib/stores/categories.svelte.ts`
-- `src/lib/stores/discover.svelte.ts`
-- `src/lib/stores/library.svelte.ts`
-- `src/lib/stores/services.svelte.ts`
-- `src/lib/util/categoryIcon.ts`
-
-**Modified (26 files):** README, activeContext, progress, Cargo.lock, Cargo.toml, capabilities/default.json, commands/mod.rs, lib.rs, state.rs, tauri.conf.json, app.css, api.ts, ActivityHistory, Discover, Library, PackageDetail, PackageRow, Sidebar, Snapshots, Trending, activity store, trending store, ui store, types.ts, +layout, +page
+### Phase 12c + 12e — GitHub anonymous + Device Flow + Keychain ✅ (combined Backend Architect pass)
+- `src-tauri/src/github/{mod,url,auth,stats}.rs`
+  - `url.rs` — strict `parse_github_url`: exact host match `github.com` (rejects subdomains + suffix attacks), owner+repo `^[A-Za-z0-9._-]{1,39}$`, no `..` segments, strips `.git`/`/tree/...`. 20 validator tests
+  - `auth.rs` — Device Flow + Keychain. `Token` newtype with redacted `Debug`. Service ID `dev.openbrew.browser` matches bundle ID (test parses tauri.conf.json). OAuth scopes `["read:user", "public_repo"]` minimum (pinned by test). Polling honors server `interval` + doubles on `slow_down` per RFC 8628 §3.5. No disk fallback on Keychain failure
+  - `stats.rs` — `fetch_repo_stats` with 24h disk cache at `app_data_dir/github-cache/<owner>__<repo>.json`. 1 MiB body cap. Rate-limit handling (403 + `X-RateLimit-Remaining: 0` → typed `GithubRateLimited { reset_at }`, no retry, no backoff). Auth header sent when token present
+  - `mod.rs` — `#![deny(clippy::print_*, dbg_macro)]` enforced; token never logged
+- `src-tauri/src/commands/github.rs` — 5 commands: `github_repo_stats`/`github_status`/`github_signin_start`/`github_signin_poll`/`github_signout`. Every one consults `require_network` AND `settings.github_enabled` before any network attempt
+- `settings.rs` — added `github_enabled: bool` field (default false)
+- `error.rs` — `GithubRateLimited`/`KeychainUnavailable`/`AuthRequired`/`ScopeRequired` variants (last two prepped for 12f)
+- `tauri.conf.json` CSP: `connect-src` adds `https://api.github.com` + `https://github.com` (both in one shot)
+- `keyring = "3"` + `url = "2"` added
+- `src/lib/stores/github.svelte.ts` — github store with status + repoStatsCache + signIn/signOut/getRepoStats
+- `src/lib/components/DeviceFlowModal.svelte` — user code display, "Open in browser" button, poll loop
+- `SettingsSectionGitHub.svelte` — toggle + sign-in flow + privacy text
+- `PackageDetail.svelte` — GitHub stats card below homepage when settings allow
+- BUILD.md addendum: "GitHub OAuth App (one-time setup before release)" 7-step guide. Placeholder `GITHUB_OAUTH_CLIENT_ID` MUST be swapped before any release
+- +60 tests (274 → 334)
 
 ## Tests & lint (current)
 
-- `cargo test`: **210 passed**, 0 failed, 6 ignored (was 204 pre-session)
+- `cargo test`: **334 passed**, 0 failed, 6 ignored
 - `cargo clippy --all-targets -- -D warnings`: clean
 - `cargo check`: clean
 - `npm run check`: 0 errors, 1 pre-existing tsconfig-node warning
 - `npm run build`: clean
 
-## Ideas captured (in `ideas.md`)
+## What's left
 
-- **Recipes** — guided multi-package install flows (deferred from Phase 10)
-- **GitHub OAuth (optional)** — Device Flow for "Wrong?" reporting / star / bug-report-with-system-info
-- **Liquid Glass / NSVisualEffectView (Phase 9 polish)** — Tier A done in this session; Tier B (true Tahoe Liquid Glass via Swift bridge) deferred to v0.2
-- Discovery UI: chip filters DONE; "what's new this week" pulled from cron diff (still pending); per-cask "similar to" (still pending)
-
-## Pending (in new priority order — feeds the Phase 12+ plan)
-
-1. **README + landing release-asset link update** (README done in WT; landing pending)
-2. **Phase 12a — Bundled catalog + user-initiated refresh** (formulae.brew.sh JSON, gzipped in binary, manual Refresh button)
-3. **Phase 12b — Settings shell** (modal/page, sections for Appearance / Network / GitHub / Brew / Activity / About)
-4. **Phase 12c — GitHub anonymous tier** (homepage detection, stars/forks/last-release in PackageDetail, 24h disk cache)
-5. **Phase 12d — Settings: network controls + paranoid mode**
-6. **Phase 12e — GitHub Device Flow + Keychain token storage**
-7. **Phase 12f — GitHub authed actions** (star/issue/watch buttons)
-8. **Deprecation warnings** (depends on Phase 12a — needs catalog)
-9. **Build-error rates** (depends on Phase 12a — needs catalog + analytics endpoint)
-10. **Reverse dependencies** (depends on Phase 12a — needs catalog)
-11. **Dependency tree visualization** (depends on Phase 12a)
-12. **Recipes core (Phase 10)** — still pending; depends on catalog for validation
-13. **"Wrong?" GitHub-issue link** in PackageDetail (depends on Phase 12c/e for in-app file vs deeplink)
-14. **Real screenshots** per `visualStory.md`
-15. **Categorize cron** on Beast or umbp for daily delta
-16. **Address remaining `codeReview.md`** important + nit items
-17. **Address remaining `accessibility.md`** important + nit items
+| Sub-phase | Status |
+|-----------|--------|
+| 12f — GitHub authed actions (star/unstar/is_starred/watch/unwatch/create_issue + "Wrong?" link + Dashboard personal-stats card) | next |
+| Phase 13 — Catalog enrichment (Haiku Tier A friendly names + summaries, then Tier B use cases + similar + tags, AI Features master toggle, full plan in `phase13-plan.md`) | queued, can run parallel with 12f |
+| Recipes (Phase 10) | deferred — depends on catalog (now available), pairs naturally with enrichment |
+| `installedAt` on Package + Last-Updated sort | small standalone backend addition, not in any phase |
+| Tier B Tahoe Liquid Glass (Swift bridge) | v0.2 |
+| Phase 14 — bundled cask icons | **explicitly DROPPED** — trademark/redistribution concern raised; runtime probe with paranoid gate is sufficient |
 
 ## Memory bank inventory
 
-`toc.md`, `projectbrief.md`, `techContext.md`, `decisions.md`, `activeContext.md` (this), `progress.md`, `systemPatterns.md`, `designSystem.md`, `uxArchitecture.md`, `backendApi.md`, `frontendComponents.md`, `codeReview.md`, `apiTests.md`, `accessibility.md`, `visualStory.md`, `security.md`, `ideas.md`, `agentLog.md`, `NEXT-SESSION.md`, `tasks/2026-05/`, `scans/`.
+`toc.md`, `projectbrief.md`, `techContext.md`, `decisions.md`, `activeContext.md` (this), `progress.md`, `systemPatterns.md`, `designSystem.md`, `uxArchitecture.md`, `backendApi.md`, `frontendComponents.md`, `codeReview.md`, `apiTests.md`, `accessibility.md`, `visualStory.md`, `security.md`, `ideas.md`, `phase12-plan.md`, `phase13-plan.md`, `agentLog.md`, `NEXT-SESSION.md`, `scans/{phase12-security-review.md, ...other scans}`, `tasks/2026-05/`.
+
+Also new and uncommitted: `PHILOSOPHY.md` (271 lines, root) — project manifesto added by user during session.

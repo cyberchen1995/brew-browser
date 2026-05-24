@@ -188,3 +188,47 @@
 - Two-tier respects users who want zero-account posture (default = off entirely) and power users who want full integration
 
 **Trade-off accepted:** Anonymous tier consumes the 60 reqs/hr per IP — heavy browsing may rate-limit. Pitch sign-in when this happens.
+
+---
+
+## 2026-05-24-night: Phase 14 (bundled cask icons) DROPPED
+
+**Context:** User proposed pre-fetching cask icons at build time and bundling them in the binary to eliminate the runtime cask-homepage-probe network path. Tempting because it would reduce the documented outbound paths from 5 to 4 (or 7 to 6 after Phase 12c+e) and make Discover/Trending render instantly without probe latency.
+
+**Decision:** NOT going to do this. Leave the runtime probe + paranoid-mode gate as the cask-icon story.
+
+**Rationale (the redistribution problem):**
+- The current probe fetches and DISPLAYS vendor icons (Slack, 1Password, Adobe, ~7,600 casks) on the user's machine — closest analog is "rendering a page that shows the vendor's logo" → generally OK as nominative fair use
+- Bundling those icons into our binary is REDISTRIBUTION at scale — many vendors have explicit "no third-party redistribution of brand assets" terms; even where not explicit, the surface area for trademark complaints is real
+- "Brew did it" doesn't apply — Homebrew doesn't bundle icons either, they point at homepages
+- The current probe is already very respectful: 7d cache, sandboxed against SSRF (rejects RFC1918 / link-local / loopback / cloud-metadata, redirect re-check), per-cask-per-week max, concurrency-limited semaphore, paranoid mode kills it in one click
+
+**Considered middle ground (rejected):** bundle only FOSS-licensed casks' icons via license filter from Phase 12a catalog + top-N popularity from analytics. Would gain ~90% of the network reduction without ~95% of the redistribution risk. **Rejected** as additional complexity for a non-essential win — the runtime probe is already good enough for paranoid-mode-OFF users, and paranoid-mode-ON users already get zero icon probes.
+
+---
+
+## 2026-05-24-night: Phase 12 Wave ordering (Foundation-first, Option A)
+
+**Context:** Phase 12 had 6 sub-phases (a-f) with various dependency edges. Two wave orderings considered: (A) 12d first → combined 12c+12e → 12f, (B) 12c + 12d + 12e in parallel with merge resolution → 12f.
+
+**Decision:** Option A — Foundation-first.
+
+**Rationale:**
+- 12d delivers `require_network(feature)` helper + settings persistence — 12c and 12e then consume the helper directly instead of TODO-commenting it
+- 12c and 12e both touch `src-tauri/src/github/` module + commands/mod.rs + lib.rs handler list — combining them in one Backend Architect pass avoids two agents fighting over the same files
+- Parallel option B saved one wave but required hand-merging mod.rs/lib.rs/tauri.conf.json conflicts — net wall time similar
+- A is cleaner; each step starts from a known-good staged state
+
+**Outcome:** delivered cleanly. 274 → 334 tests across Wave 2; zero merge conflicts.
+
+---
+
+## 2026-05-24-night: Combined GitHub backend (12c + 12e in one Backend Architect)
+
+**Context:** Original plan split GitHub work into 12c (anonymous repo stats) and 12e (Device Flow + Keychain). Both touch `src-tauri/src/github/` module. Separate agents would conflict.
+
+**Decision:** One Backend Architect pass implements the entire GitHub module end-to-end: parse_github_url validator (12c) + RepoStats fetch + cache (12c) + Token newtype + Device Flow + Keychain (12e) + 5 IPC commands.
+
+**Rationale:** github module is a single coherent unit. Splitting it forces shared-file coordination. One agent owns it cleanly.
+
+**Constraint observed:** the combined agent ships placeholder `GITHUB_OAUTH_CLIENT_ID` const. Real client_id must be added before any release (documented in BUILD.md, 7-step OAuth App creation guide). 12c functionality works without a client_id — anonymous tier is independent. Only 12e sign-in needs the real client_id.

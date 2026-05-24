@@ -5,11 +5,14 @@
 //! in `commands::*`.
 
 mod brew;
+mod catalog;
 mod commands;
 mod error;
+mod github;
 mod state;
 mod trending;
 mod types;
+mod util;
 
 use commands::*;
 
@@ -49,7 +52,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            app_version,
             brew_doctor,
+            brew_get_analytics,
+            brew_set_analytics,
             brew_list,
             brew_outdated,
             brew_info,
@@ -72,6 +78,12 @@ pub fn run() {
             trending_clear_cache,
             cask_icon,
             cask_icon_from_homepage,
+            catalog_summary,
+            catalog_refresh,
+            catalog_lookup_formula,
+            catalog_lookup_cask,
+            catalog_formulae_summary,
+            catalog_casks_summary,
             categories_data,
             disk_usage,
             disk_usage_clear_cache,
@@ -81,6 +93,14 @@ pub fn run() {
             services_start,
             services_stop,
             services_restart,
+            settings_get,
+            settings_set,
+            settings_reset,
+            github_repo_stats,
+            github_status,
+            github_signin_start,
+            github_signin_poll,
+            github_signout,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

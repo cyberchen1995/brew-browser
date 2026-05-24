@@ -105,6 +105,11 @@ pub async fn cask_icon_from_homepage(
     homepage: String,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, BrewError> {
+    // Paranoid-mode gate (Phase 12d). Must run before any token or URL
+    // validation — the goal is to silently refuse outbound traffic the
+    // moment paranoid mode flips on, even for a perfectly valid cask.
+    state.require_network("cask_icon_from_homepage").await?;
+
     // Defense in depth — token reaches the filesystem (cache path), so
     // the stricter cask-token validator applies (L1). This rejects `/`
     // and `..` segments that `validate_package_name` would otherwise

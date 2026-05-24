@@ -5,12 +5,23 @@
   import { startEnvProbe } from "$lib/stores/env.svelte";
   import { activity } from "$lib/stores/activity.svelte";
   import { services } from "$lib/stores/services.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
 
   let { children } = $props();
 
   onMount(() => {
     ui.loadThemeFromStorage();
+    // Settings (Phase 12b) — all read with enum/numeric validation so a
+    // corrupt or hostile localStorage entry can't poison runtime state.
+    ui.loadDefaultSectionFromStorage();
+    ui.loadVibrancyMaterialFromStorage();
+    ui.loadConfirmDestructiveFromStorage();
+    ui.loadActivitySettingsFromStorage();
     activity.hydrate();
+    // Phase 12d — hydrate the persisted settings.json into the renderer
+    // so the Network section, the Catalog stale banner, and the cask
+    // icon mode all read from one source of truth.
+    void settings.load();
     // Prime the services list so the sidebar's "Services" badge can show a
     // count from first paint; the Services tab refreshes again on mount.
     void services.load();

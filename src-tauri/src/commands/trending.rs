@@ -16,6 +16,14 @@ pub async fn trending_fetch(
     window: TrendingWindow,
     state: State<'_, AppState>,
 ) -> Result<TrendingReport, BrewError> {
+    // Paranoid-mode gate (Phase 12d). Even a stale cache hit is
+    // disallowed in paranoid mode — the user's expectation is "no
+    // outbound calls would happen here", and even though the cached
+    // path doesn't hit the network, returning fresh-looking data
+    // contradicts the toggle. The cost is zero (the gate is a single
+    // RwLock read), the policy is unambiguous.
+    state.require_network("trending_fetch").await?;
+
     // 1. Short critical section: check cache freshness.
     {
         let cache = state.trending_cache.lock().await;

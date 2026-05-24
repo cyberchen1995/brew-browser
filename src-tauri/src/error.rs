@@ -69,6 +69,50 @@ pub enum BrewError {
 
     #[error("internal error: {message}")]
     Internal { message: String },
+
+    /// Paranoid mode is on (or settings are corrupt → fail closed).
+    /// The `feature` field identifies which outbound command was
+    /// rejected, so the UI can route the toast to the right setting.
+    #[error("paranoid mode is enabled; outbound feature {feature} is blocked")]
+    ParanoidModeBlocked { feature: String },
+
+    /// GitHub's REST API returned a rate-limit response (typically
+    /// `403 Forbidden` with `X-RateLimit-Remaining: 0`). `reset_at` is
+    /// the unix timestamp from the `X-RateLimit-Reset` header when the
+    /// budget refills. **Callers must not retry** — per the §12c/12f
+    /// review the only correct response is to surface the limit to the
+    /// user with a "Sign in to lift the limit" CTA.
+    #[error("github rate limit exceeded; resets at {reset_at}")]
+    #[serde(rename_all = "camelCase")]
+    GithubRateLimited { reset_at: u64 },
+
+    /// The macOS Keychain refused to store or retrieve a credential.
+    /// **No disk fallback** — per the §12e review the OAuth token never
+    /// lands on disk. The frontend should surface this with a
+    /// "Keychain unavailable" error rather than offering a workaround
+    /// that weakens the security posture.
+    #[error("keychain unavailable: {message}")]
+    KeychainUnavailable { message: String },
+
+    /// An authenticated GitHub action was attempted without a stored
+    /// token. The frontend should route this to the "Sign in" CTA.
+    ///
+    /// Currently emitted only by tests; Phase 12f wires it into the
+    /// star/issue/watch commands so the typed error reaches the
+    /// frontend instead of an opaque 401.
+    #[allow(dead_code)]
+    #[error("github authentication required")]
+    AuthRequired,
+
+    /// An authenticated GitHub action requires an OAuth scope the
+    /// stored token doesn't carry. Surfaces the missing scope so the
+    /// frontend can prompt a re-sign-in with the expanded scope set.
+    ///
+    /// Currently emitted only by tests; Phase 12f wires it into the
+    /// authed commands.
+    #[allow(dead_code)]
+    #[error("github scope required: {scope}")]
+    ScopeRequired { scope: String },
 }
 
 // ---------- From impls ----------
@@ -302,6 +346,55 @@ mod tests {
         let v: Value = serde_json::to_value(&err).unwrap();
         assert_eq!(v["code"], "internal");
         assert_eq!(v["message"], "boom");
+    }
+
+    #[test]
+    fn paranoid_mode_blocked_serializes_with_feature() {
+        let err = BrewError::ParanoidModeBlocked {
+            feature: "trending_fetch".into(),
+        };
+        let v: Value = serde_json::to_value(&err).unwrap();
+        assert_eq!(v["code"], "paranoid_mode_blocked");
+        assert_eq!(v["feature"], "trending_fetch");
+    }
+
+    #[test]
+    fn github_rate_limited_serializes_with_camel_case_reset_at() {
+        let err = BrewError::GithubRateLimited {
+            reset_at: 1_700_000_000,
+        };
+        let v: Value = serde_json::to_value(&err).unwrap();
+        assert_eq!(v["code"], "github_rate_limited");
+        assert_eq!(v["resetAt"], 1_700_000_000u64);
+        assert!(
+            v.get("reset_at").is_none(),
+            "must not emit snake_case `reset_at`"
+        );
+    }
+
+    #[test]
+    fn keychain_unavailable_serializes_with_message() {
+        let err = BrewError::KeychainUnavailable {
+            message: "no entry".into(),
+        };
+        let v: Value = serde_json::to_value(&err).unwrap();
+        assert_eq!(v["code"], "keychain_unavailable");
+        assert_eq!(v["message"], "no entry");
+    }
+
+    #[test]
+    fn auth_required_serializes_to_auth_required_code() {
+        assert_eq!(code_of(&BrewError::AuthRequired), "auth_required");
+    }
+
+    #[test]
+    fn scope_required_serializes_with_scope() {
+        let err = BrewError::ScopeRequired {
+            scope: "public_repo".into(),
+        };
+        let v: Value = serde_json::to_value(&err).unwrap();
+        assert_eq!(v["code"], "scope_required");
+        assert_eq!(v["scope"], "public_repo");
     }
 
     // ---- truncate helpers ----

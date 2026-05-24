@@ -91,3 +91,23 @@ Phase 12 grew out of two user prompts:
 - Search within a single category
 - Multi-select category intersection ("AI ∩ Developer Tools")
 - Per-cask "Similar to" suggestions
+
+## Resolved this session (Phase 12 Wave 1 + Wave 2)
+
+- ✅ **Bundled catalog + manual refresh** — Phase 12a shipped, ~3 MB compressed, 8k formulae + 7.6k casks
+- ✅ **Settings shell + 6 sections** — Phase 12b shipped, Cmd+, opens, gear icon in sidebar
+- ✅ **Paranoid mode + per-feature network controls** — Phase 12d shipped, single helper gates every outbound command
+- ✅ **GitHub anonymous repo stats** — Phase 12c shipped, stars/forks/last-release/archived state in PackageDetail
+- ✅ **GitHub Device Flow + Keychain sign-in** — Phase 12e shipped, token never returned to frontend, never written to disk, never logged
+- ❌ **Phase 14 bundled cask icons** — DROPPED per `decisions.md`; trademark/redistribution risk too real to justify the small UX win
+
+## Still open
+
+- Phase 12f — GitHub authed actions (star/unstar/is_starred/watch/unwatch/create_issue + "Wrong?" link + Dashboard personal-stats card)
+- Phase 13 — Catalog enrichment via Haiku (Tier A friendly names + summaries, Tier B use cases + similar + tags) with AI Features master toggle. Full spec at `phase13-plan.md`
+- Recipes (Phase 10) — paused, depends on catalog (now available)
+- `installedAt` on Package + Last-Updated sort — small standalone backend addition
+- Tier B Tahoe Liquid Glass via Swift bridge — v0.2
+- Real screenshots per `visualStory.md`
+- Categorize cron on Beast or umbp for daily delta
+- Build-error rates / reverse deps / dep-tree viz — natural follow-ups once catalog is in regular use (Phase 12a unlocks all of these)

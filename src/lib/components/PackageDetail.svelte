@@ -16,6 +16,12 @@
   import Play from "@lucide/svelte/icons/play";
   import Square from "@lucide/svelte/icons/square";
   import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
+  import Star from "@lucide/svelte/icons/star";
+  import GitFork from "@lucide/svelte/icons/git-fork";
+  import Tag from "@lucide/svelte/icons/tag";
+  import Archive from "@lucide/svelte/icons/archive";
+  import Loader from "@lucide/svelte/icons/loader-2";
+  import AlertCircle from "@lucide/svelte/icons/alert-circle";
 
   import { ui } from "$lib/stores/ui.svelte";
   import { packages } from "$lib/stores/packages.svelte";
@@ -24,6 +30,8 @@
   import { categories } from "$lib/stores/categories.svelte";
   import { discover } from "$lib/stores/discover.svelte";
   import { services } from "$lib/stores/services.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
+  import { github, type RepoStatsOutcome } from "$lib/stores/github.svelte";
   import { brewInfo, brewInstall, brewUninstall, brewUpgrade } from "$lib/api";
   import { safeOpenUrl } from "$lib/util/url";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
@@ -219,6 +227,80 @@
   let svcStatus = $derived(svc ? normalizeServiceStatus(svc.status) : null);
   let svcPending = $derived(pkg ? services.isPending(pkg.name) : false);
 
+  // ────────────────────────────────────────────────────────────────
+  // Phase 12c — GitHub stats card.
+  //
+  // We gate three things before triggering a fetch:
+  //   1. `settings.effective.githubEnabled` — user opt-in toggle.
+  //   2. `!settings.effective.paranoidMode` — master kill switch.
+  //   3. `pkg.homepage` looks like a github.com URL (cheap pre-check
+  //      so we don't even paint the card for non-GitHub homepages).
+  //
+  // The backend re-validates the URL strictly via `parse_github_url`,
+  // so the frontend check is just a UI optimisation; if it false-
+  // positives the backend will still return `null` (collapses to "miss").
+  //
+  // The store handles the actual fetch + caching; we just read the
+  // outcome out of `github.repoStatsCache` and re-render.
+
+  /** Cheap regex check: looks like https?://github.com/<owner>/<repo>. */
+  function looksLikeGithubHomepage(url: string | null | undefined): boolean {
+    if (!url) return false;
+    return /^https?:\/\/github\.com\/[^/]+\/[^/?#]+/i.test(url.trim());
+  }
+
+  let githubStatsEligible = $derived(
+    !!pkg?.homepage &&
+      looksLikeGithubHomepage(pkg?.homepage) &&
+      settings.effective.githubEnabled &&
+      !settings.effective.paranoidMode,
+  );
+
+  /** The outcome from the GitHub store for the current homepage. */
+  let githubOutcome = $derived<RepoStatsOutcome | null>(
+    githubStatsEligible && pkg?.homepage
+      ? (github.repoStatsCache.get(pkg.homepage) ?? { kind: "loading" })
+      : null,
+  );
+
+  // Trigger the fetch on first paint for a given homepage. The store
+  // memoises in its cache so repeat opens of the same package don't
+  // re-invoke.
+  $effect(() => {
+    if (githubStatsEligible && pkg?.homepage) {
+      void github.getRepoStats(pkg.homepage);
+    }
+  });
+
+  /** Format a star/fork count in compact form (1.2k, 12.3k, 1.2M). */
+  function fmtCount(n: number): string {
+    if (n < 1000) return `${n}`;
+    if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0).replace(/\.0$/, "")}k`;
+    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  }
+
+  /** "3 weeks ago" style for ISO timestamps. */
+  function fmtRelative(iso: string | null): string {
+    if (!iso) return "—";
+    const t = Date.parse(iso);
+    if (Number.isNaN(t)) return "—";
+    const diffMs = Date.now() - t;
+    const days = Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)));
+    if (days === 0) return "today";
+    if (days === 1) return "yesterday";
+    if (days < 7) return `${days} days ago`;
+    if (days < 30) return `${Math.floor(days / 7)} weeks ago`;
+    if (days < 365) return `${Math.floor(days / 30)} months ago`;
+    const years = Math.floor(days / 365);
+    return years === 1 ? "1 year ago" : `${years} years ago`;
+  }
+
+  /** Format the rate-limit reset time for the inline error variant. */
+  function fmtResetTime(resetAt: number): string {
+    if (!resetAt) return "soon";
+    return new Date(resetAt * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
   async function svcAct(action: "start" | "stop" | "restart") {
     if (!pkg) return;
     try {
@@ -311,6 +393,74 @@
             <span class="truncate">{pkg.homepage}</span>
             <ExternalLink size={12} />
           </button>
+        {/if}
+
+        {#if githubOutcome}
+          <section class="gh-card" aria-label="GitHub repository statistics">
+            {#if githubOutcome.kind === "loading"}
+              <div class="gh-loading">
+                <Loader size={14} class="spin-slow" />
+                <span>Loading GitHub stats…</span>
+              </div>
+            {:else if githubOutcome.kind === "loaded"}
+              {@const s = githubOutcome.stats}
+              <div class="gh-stats">
+                <span class="gh-stat" title="Stargazers">
+                  <Star size={14} /> {fmtCount(s.stars)}
+                </span>
+                <span class="gh-sep">·</span>
+                <span class="gh-stat" title="Forks">
+                  <GitFork size={14} /> {fmtCount(s.forks)}
+                </span>
+                {#if s.lastReleaseTag}
+                  <span class="gh-sep">·</span>
+                  <span class="gh-stat" title={s.lastReleaseDate ?? ""}>
+                    <Tag size={14} /> {s.lastReleaseTag}
+                    {#if s.lastReleaseDate}
+                      <span class="gh-muted">({fmtRelative(s.lastReleaseDate)})</span>
+                    {/if}
+                  </span>
+                {/if}
+              </div>
+              {#if s.archived}
+                <div class="gh-archived" role="status">
+                  <Archive size={14} />
+                  <span>
+                    Archived{s.archivedAt ? ` ${fmtRelative(s.archivedAt)}` : ""} — likely unmaintained.
+                  </span>
+                </div>
+              {/if}
+              {#if s.licenseSpdx && pkg.license && s.licenseSpdx !== pkg.license}
+                <div
+                  class="gh-license-mismatch"
+                  title={`brew reports: ${pkg.license} · GitHub reports: ${s.licenseSpdx}`}
+                >
+                  <AlertCircle size={12} />
+                  License mismatch — brew: <code>{pkg.license}</code>, GitHub: <code>{s.licenseSpdx}</code>
+                </div>
+              {/if}
+            {:else if githubOutcome.kind === "rateLimited"}
+              <div class="gh-error">
+                <AlertCircle size={14} />
+                <span>
+                  GitHub stats temporarily unavailable (rate limit resets at
+                  {fmtResetTime(githubOutcome.resetAt)}).
+                  Sign in via Settings → GitHub to remove the limit.
+                </span>
+              </div>
+            {:else if githubOutcome.kind === "blocked"}
+              <div class="gh-error">
+                <AlertCircle size={14} />
+                <span>Blocked by Paranoid Mode. Disable in Settings → Network.</span>
+              </div>
+            {:else if githubOutcome.kind === "error"}
+              <div class="gh-error">
+                <AlertCircle size={14} />
+                <span>Couldn't load GitHub stats: {githubOutcome.message}</span>
+              </div>
+            {/if}
+            <!-- kind === "miss" renders nothing -->
+          </section>
         {/if}
 
         {#if svc}
@@ -658,4 +808,73 @@
   }
 
   .error { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
+
+  /* ── GitHub stats card (Phase 12c) ── */
+  .gh-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-sunken);
+    padding: var(--space-2) var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    font-size: var(--text-body-sm);
+  }
+  .gh-loading {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--color-text-muted);
+  }
+  .gh-stats {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    color: var(--color-text-primary);
+  }
+  .gh-stat {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .gh-sep { color: var(--color-text-muted); }
+  .gh-muted { color: var(--color-text-muted); }
+  .gh-archived {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: var(--color-warning-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--color-warning-strong);
+  }
+  .gh-license-mismatch {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--color-text-muted);
+    font-size: var(--text-caption);
+  }
+  .gh-license-mismatch code {
+    font-family: var(--font-mono);
+    font-size: var(--text-mono);
+  }
+  .gh-error {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--color-text-muted);
+    font-size: var(--text-body-sm);
+  }
+  :global(.spin-slow) {
+    animation: spin 1.5s linear infinite;
+  }
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.spin-slow) { animation: none; }
+  }
 </style>

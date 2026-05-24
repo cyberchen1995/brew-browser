@@ -8,6 +8,7 @@
   import Sun from "@lucide/svelte/icons/sun";
   import Moon from "@lucide/svelte/icons/moon";
   import Monitor from "@lucide/svelte/icons/monitor";
+  import SettingsIcon from "@lucide/svelte/icons/settings";
 
   import { ui } from "$lib/stores/ui.svelte";
   import { packages } from "$lib/stores/packages.svelte";
@@ -128,10 +129,21 @@
   </nav>
 
   <footer class="foot">
-    <div class="theme" role="group" aria-label="Theme">
-      <button class:on={ui.theme === "light"}  title="Light"  aria-label="Light theme"  onclick={() => setTheme("light")}><Sun size={14} /></button>
-      <button class:on={ui.theme === "dark"}   title="Dark"   aria-label="Dark theme"   onclick={() => setTheme("dark")}><Moon size={14} /></button>
-      <button class:on={ui.theme === "system"} title="System" aria-label="System theme" onclick={() => setTheme("system")}><Monitor size={14} /></button>
+    <div class="controls">
+      <div class="theme" role="group" aria-label="Theme">
+        <button class:on={ui.theme === "light"}  title="Light"  aria-label="Light theme"  onclick={() => setTheme("light")}><Sun size={14} /></button>
+        <button class:on={ui.theme === "dark"}   title="Dark"   aria-label="Dark theme"   onclick={() => setTheme("dark")}><Moon size={14} /></button>
+        <button class:on={ui.theme === "system"} title="System" aria-label="System theme" onclick={() => setTheme("system")}><Monitor size={14} /></button>
+      </div>
+      <button
+        type="button"
+        class="gear"
+        title="Settings (⌘,)"
+        aria-label="Open Settings"
+        onclick={() => ui.openSettings()}
+      >
+        <SettingsIcon size={14} />
+      </button>
     </div>
     <button
       type="button"
@@ -235,6 +247,11 @@
     flex-direction: column;
     gap: var(--space-2);
   }
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
   .theme {
     display: inline-flex;
     align-items: center;
@@ -258,6 +275,24 @@
     background: var(--color-surface-raised);
     color: var(--color-text-primary);
     box-shadow: var(--shadow-xs);
+  }
+  .gear {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-sunken);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: background-color var(--motion-duration-fast) var(--motion-ease-out),
+                color var(--motion-duration-fast) var(--motion-ease-out);
+  }
+  .gear:hover {
+    background: var(--color-surface-raised);
+    color: var(--color-text-primary);
   }
   .status {
     display: inline-flex;
