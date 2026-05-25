@@ -26,7 +26,7 @@ class PackagesStore {
     this.loading = true;
     this.error = null;
     try {
-      this.list = await brewList();
+      this.list = await brewList(force);
       this.lastLoadedAt = Date.now();
     } catch (e) {
       if (isBrewError(e)) {

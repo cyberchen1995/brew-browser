@@ -58,8 +58,18 @@ export function brewDoctor(): Promise<BrewEnvironment> {
   return invoke<BrewEnvironment>("brew_doctor");
 }
 
-export function brewList(): Promise<PackageList> {
-  return invoke<PackageList>("brew_list");
+/**
+ * Read the installed package list (formulae + casks).
+ *
+ * Pass `force: true` to bypass the backend's `installed_cache` —
+ * needed when the user explicitly clicks Refresh, OR after any
+ * in-app action that mutates the brew install set (install,
+ * uninstall, upgrade, snapshot restore). Without the bypass, brew
+ * commands run from the user's terminal don't get reflected in the
+ * app until process restart.
+ */
+export function brewList(force = false): Promise<PackageList> {
+  return invoke<PackageList>("brew_list", { force });
 }
 
 export function brewInfo(name: string, kind: PackageKind): Promise<PackageDetail> {

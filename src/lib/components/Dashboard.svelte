@@ -69,13 +69,28 @@
   // Phase 12a — catalog refresh handler
   //
   // Refresh writes a fresh `formula.json` + `cask.json` to the user-data
-  // directory and swaps the active catalog. The store handles its own
-  // single-flight gating; we only need to surface success/failure to
-  // the user via the toast queue. Failure messages already disambiguate
-  // paranoid-mode vs brew-exit-non-zero on the store side.
+  // directory and swaps the active catalog, AND force-reloads the
+  // installed package list (which carries the `outdated` flag the
+  // Dashboard's Updates card + Library's Outdated filter both read).
+  //
+  // Without the installed-list reload, a user who ran `brew upgrade`
+  // in their terminal would see the same stale outdated count even
+  // after a successful catalog refresh — the catalog and the
+  // installed list are two different data sources, and the user
+  // reasonably expects "Refresh" to refresh both.
+  //
+  // The store handles its own single-flight gating; we only need to
+  // surface success/failure to the user via the toast queue. Failure
+  // messages already disambiguate paranoid-mode vs brew-exit-non-zero
+  // on the store side.
   async function refreshCatalog() {
     const ok = await catalog.refresh();
     if (ok) {
+      // Force-reload installed packages so outdated flags are accurate.
+      // Best-effort: catalog refresh was the user-visible action; if
+      // the installed-list reload fails (rare) we don't surface a
+      // second toast on top of the catalog success one.
+      await packages.load(true).catch(() => {});
       toast.success("Catalog refreshed", `Fetched from formulae.brew.sh`);
     } else if (catalog.refreshError) {
       toast.error("Catalog refresh failed", catalog.refreshError);

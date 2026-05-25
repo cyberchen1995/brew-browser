@@ -10,9 +10,19 @@ use crate::state::AppState;
 use crate::types::{OutdatedPackage, PackageKind, PackageList};
 
 #[tauri::command]
-pub async fn brew_list(state: State<'_, AppState>) -> Result<PackageList, BrewError> {
-    // Cache check.
-    {
+pub async fn brew_list(
+    state: State<'_, AppState>,
+    force: Option<bool>,
+) -> Result<PackageList, BrewError> {
+    let force = force.unwrap_or(false);
+    // Cache check — bypass on explicit force=true so the Refresh
+    // button (Dashboard) and the post-action reloads (Install /
+    // Uninstall / Upgrade / Snapshot restore) get truly fresh data.
+    //
+    // Without the bypass, a user who ran `brew upgrade` in their
+    // terminal would see the same stale outdated list the cache
+    // returned on first launch, until they restarted the app.
+    if !force {
         let cached = state.installed_cache.read().await;
         if let Some(c) = cached.as_ref() {
             return Ok(c.clone());
