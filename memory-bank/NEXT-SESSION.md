@@ -12,7 +12,7 @@ Read this first, then `activeContext.md`, then the latest entries in `progress.m
 - **v0.3.0** is live. Signed + notarized + stapled `.dmg` AND signed `.app.tar.gz` (the auto-updater artifact) both on the GH release: <https://github.com/msitarzewski/brew-browser/releases/tag/v0.3.0>.
 - **Manifest live** at <https://brew-browser.zerologic.com/updater.json>. Served by Caddy on umbp. Auto-updater path validated end-to-end with real minisign keypair.
 - **Issue #1** (Joshua Butner / @heyjawrsh) closed. Posted a thanks comment.
-- **Stars:** 9 last check (HN buried, LinkedIn announcement still circulating).
+- **Stars:** 18 as of 2026-05-25 (doubled since v0.2.1 ship; LinkedIn announcement still circulating, v0.3.0 release likely contributing).
 - **Working tree clean.** Three commits on `main` this two-session arc: `1bfe21f` (Phase 15 fix-up), `820c1f0` (GitHub coverage expansion), `d7c2bca` (v0.3.0 release).
 
 ## What landed in v0.3.0

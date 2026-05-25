@@ -41,6 +41,7 @@
   import { github, type RepoStatsOutcome, type StarredOutcome } from "$lib/stores/github.svelte";
   import { brewInfo, brewInstall, brewUninstall, brewUpgrade, appVersion } from "$lib/api";
   import { safeOpenUrl } from "$lib/util/url";
+  import { reportableToastError } from "$lib/util/reportIssue";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
   import IssueModal from "./IssueModal.svelte";
   import { brewErrorMessage, isBrewError, normalizeServiceStatus, type EnrichmentEntry, type IconSource, type PackageDetail } from "$lib/types";
@@ -116,7 +117,7 @@
     try {
       detail = await brewInfo(name, kind);
     } catch (e) {
-      error = isBrewError(e) ? e.code : `Backend not available: ${String(e)}`;
+      error = isBrewError(e) ? brewErrorMessage(e) : `Backend not available: ${String(e)}`;
     } finally {
       loading = false;
     }
@@ -145,7 +146,7 @@
         toast.error(`Install failed: ${name}`);
       }
     } catch (e) {
-      toast.error("Install failed", isBrewError(e) ? e.code : String(e));
+      reportableToastError("Install failed", e);
     }
   }
 
@@ -172,7 +173,7 @@
         toast.error(`Uninstall failed: ${name}`);
       }
     } catch (e) {
-      toast.error("Uninstall failed", isBrewError(e) ? e.code : String(e));
+      reportableToastError("Uninstall failed", e);
     }
   }
 
@@ -198,7 +199,7 @@
         toast.error(`Upgrade failed: ${name}`);
       }
     } catch (e) {
-      toast.error("Upgrade failed", isBrewError(e) ? e.code : String(e));
+      reportableToastError("Upgrade failed", e);
     }
   }
 
@@ -643,7 +644,7 @@
       await services.act(pkg.name, action);
       toast.success(`${action.charAt(0).toUpperCase() + action.slice(1)}ed ${pkg.name}`);
     } catch (e) {
-      toast.error(`Failed to ${action} ${pkg.name}`, isBrewError(e) ? e.code : String(e));
+      reportableToastError(`Failed to ${action} ${pkg.name}`, e);
     }
   }
 </script>

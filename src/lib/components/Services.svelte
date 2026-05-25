@@ -15,7 +15,8 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { packages } from "$lib/stores/packages.svelte";
   import { toast } from "$lib/stores/toast.svelte";
-  import { isBrewError, normalizeServiceStatus, type Service, type ServiceStatus } from "$lib/types";
+  import { normalizeServiceStatus, type Service, type ServiceStatus } from "$lib/types";
+  import { reportableToastError } from "$lib/util/reportIssue";
 
   type SortKey = "name" | "status" | "user";
   let sortKey: SortKey = $state("status");
@@ -94,7 +95,7 @@
       await services.act(name, action);
       toast.success(`${action.charAt(0).toUpperCase() + action.slice(1)}ed ${name}`);
     } catch (e) {
-      toast.error(`Failed to ${action} ${name}`, isBrewError(e) ? e.code : String(e));
+      reportableToastError(`Failed to ${action} ${name}`, e);
     }
   }
 

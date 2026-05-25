@@ -27,7 +27,8 @@
   import { brewUpgrade, diskUsage, diskUsageClearCache, openInFinder } from "$lib/api";
   import { toast } from "$lib/stores/toast.svelte";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
-  import { isBrewError, type DiskUsageReport } from "$lib/types";
+  import { brewErrorMessage, isBrewError, type DiskUsageReport } from "$lib/types";
+  import { reportableToastError } from "$lib/util/reportIssue";
 
   let disk = $state<DiskUsageReport | null>(null);
   let diskLoading = $state(false);
@@ -43,7 +44,7 @@
       }
       disk = await diskUsage();
     } catch (e) {
-      diskError = isBrewError(e) ? `Disk probe failed: ${e.code}` : `Disk probe failed: ${String(e)}`;
+      diskError = `Disk probe failed: ${isBrewError(e) ? brewErrorMessage(e) : String(e)}`;
     } finally {
       diskLoading = false;
     }
@@ -53,7 +54,7 @@
     try {
       await openInFinder(path);
     } catch (e) {
-      toast.error("Couldn't reveal in Finder", isBrewError(e) ? e.code : String(e));
+      reportableToastError("Couldn't reveal in Finder", e);
     }
   }
 
@@ -321,7 +322,7 @@
         toast.error("Upgrade-all finished with errors");
       }
     } catch (e) {
-      toast.error("Upgrade-all failed", isBrewError(e) ? e.code : String(e));
+      reportableToastError("Upgrade-all failed", e);
     } finally {
       upgradeAllRunning = false;
     }

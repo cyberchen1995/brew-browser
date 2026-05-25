@@ -12,6 +12,7 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { toast } from "$lib/stores/toast.svelte";
   import type { ActivityLine } from "$lib/types";
+  import { openReportIssueFromJob } from "$lib/util/reportIssue";
 
   let consoleEl: HTMLDivElement | undefined = $state();
   let autoScroll = $state(true);
@@ -261,7 +262,15 @@
               {#if activeJob.status === "succeeded"}
                 Done{activeJob.durationMs ? ` in ${formatElapsed(activeJob.durationMs)}` : ""}.
               {:else if activeJob.status === "failed"}
-                Failed{activeJob.durationMs ? ` after ${formatElapsed(activeJob.durationMs)}` : ""}. Output above.
+                <span>Failed{activeJob.durationMs ? ` after ${formatElapsed(activeJob.durationMs)}` : ""}. Output above.</span>
+                <button
+                  type="button"
+                  class="report-btn"
+                  onclick={() => { void openReportIssueFromJob(activeJob!, activeJob!.label); }}
+                  title="Open a pre-filled GitHub issue against brew-browser with this output"
+                >
+                  Report to brew-browser
+                </button>
               {:else if activeJob.status === "canceled"}
                 Stopped. Output above.
               {/if}
@@ -398,8 +407,32 @@
     border-top: 1px dashed var(--color-console-dim);
     color: var(--color-console-dim);
     font-style: italic;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
   }
   .footer-line.succeeded { color: var(--color-success); font-style: normal; }
   .footer-line.failed    { color: var(--color-danger);  font-style: normal; }
   .footer-line.canceled  { color: var(--color-console-dim); }
+
+  /* "Report to brew-browser" button — shown only on a failed job. Tone
+     matches the danger color of the line itself so the affordance reads
+     as paired with the failure summary. */
+  .report-btn {
+    padding: 2px 10px;
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: var(--radius-sm);
+    color: inherit;
+    font-size: var(--text-body-sm);
+    font-weight: var(--fw-medium);
+    cursor: pointer;
+    transition: background-color var(--motion-duration-fast) var(--motion-ease-out);
+  }
+  .report-btn:hover { background: color-mix(in oklch, currentColor 12%, transparent); }
+  .report-btn:focus-visible {
+    outline: 2px solid var(--color-focus, var(--color-brand, var(--color-accent)));
+    outline-offset: 2px;
+  }
 </style>

@@ -18,7 +18,8 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { toast } from "$lib/stores/toast.svelte";
   import { brewfileDump, brewfileInstall, brewfileDelete, brewfileExport, brewfileImport } from "$lib/api";
-  import { isBrewError, type BrewfileSummary } from "$lib/types";
+  import type { BrewfileSummary } from "$lib/types";
+  import { reportableToastError } from "$lib/util/reportIssue";
 
   let newLabel = $state("");
   let creating = $state(false);
@@ -60,7 +61,7 @@
       newLabel = "";
       brewfiles.load();
     } catch (e) {
-      toast.error("Snapshot failed", isBrewError(e) ? e.code : String(e));
+      reportableToastError("Snapshot failed", e);
     } finally {
       creating = false;
     }
@@ -82,7 +83,7 @@
       if (result.success) toast.success("Restore complete");
       else toast.error("Restore failed");
     } catch (e) {
-      toast.error("Restore failed", isBrewError(e) ? e.code : String(e));
+      reportableToastError("Restore failed", e);
     }
   }
 
@@ -93,7 +94,7 @@
       toast.success(`Deleted snapshot "${b.label}"`);
       brewfiles.load();
     } catch (e) {
-      toast.error("Delete failed", isBrewError(e) ? e.code : String(e));
+      reportableToastError("Delete failed", e);
     }
   }
 
@@ -108,7 +109,7 @@
       await brewfileExport(b.id, target);
       toast.success(`Exported "${b.label}"`);
     } catch (e) {
-      toast.error("Export failed", String(e));
+      reportableToastError("Export failed", e);
     }
   }
 
@@ -125,7 +126,7 @@
       toast.success(`Imported "${label}"`);
       brewfiles.load();
     } catch (e) {
-      toast.error("Import failed", String(e));
+      reportableToastError("Import failed", e);
     }
   }
 
