@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# Phase 15 — emit the in-app updater manifest for a released .dmg.
+# Phase 15 — emit the in-app updater manifest for a released .app.tar.gz.
 #
 # Usage:
 #   tools/release/publish-manifest.sh 0.3.0
 #
 # What it does:
 #   1. Validates the version argument shape.
-#   2. Locates the .dmg artifact at the canonical bundle path.
+#   2. Locates the .app.tar.gz artifact at the canonical macos bundle
+#      path. **The Tauri updater plugin's macOS install path expects a
+#      gzipped tar of the .app bundle — NOT the .dmg.** Feeding it a
+#      .dmg results in an "invalid gzip" error on every install attempt.
+#      The .dmg is still uploaded to GitHub Releases for fresh installs;
+#      only the auto-updater path needs the .app.tar.gz.
 #   3. Computes the artifact's SHA-256 digest.
-#   4. Signs the .dmg with `minisign` using the private key at
+#   4. Signs the .app.tar.gz with `minisign` using the private key at
 #      ~/.config/brew-browser/updater.key (the user generates this
 #      key once per the BUILD.md instructions; this script does not).
 #   5. Emits dist/updater.json with the shape the Tauri updater
@@ -20,7 +25,7 @@
 #          "platforms": {
 #            "darwin-aarch64": {
 #              "signature": "<minisign output>",
-#              "url": "<github release asset URL>",
+#              "url": "<github release asset URL of the .app.tar.gz>",
 #              "sha256": "<artifact digest>"
 #            }
 #          }
@@ -33,8 +38,10 @@
 # What it does NOT do:
 #   - Generate the minisign keypair (one-time setup, see BUILD.md).
 #   - Publish to the CDN (the rsync is the user's call).
-#   - Build the .dmg (npm run tauri build is upstream of this).
+#   - Build the artifact (npm run tauri build is upstream of this).
 #   - Update CHANGELOG.md or push the git tag.
+#   - Upload the .app.tar.gz to GitHub Releases (the user attaches it
+#     to the `gh release create` invocation, alongside the .dmg).
 #
 # Exit codes:
 #   0  — manifest written successfully
@@ -70,16 +77,24 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-DMG_PATH="$REPO_ROOT/src-tauri/target/release/bundle/dmg/brew-browser_${VERSION}_aarch64.dmg"
+# The Tauri bundler emits the updater artifact at this path. The
+# filename is fixed (no version stamp) inside `bundle/macos/`; we
+# upload it to GitHub Releases under a versioned name so the manifest
+# URL is unambiguous.
+ARTIFACT_PATH="$REPO_ROOT/src-tauri/target/release/bundle/macos/brew-browser.app.tar.gz"
+# Versioned name used in the published GitHub Release asset URL.
+# The user uploads `$ARTIFACT_PATH` to the release under this name.
+ARTIFACT_RELEASE_NAME="brew-browser_${VERSION}_aarch64.app.tar.gz"
 KEY_PATH="$HOME/.config/brew-browser/updater.key"
 DIST_DIR="$REPO_ROOT/dist"
 MANIFEST_PATH="$DIST_DIR/updater.json"
 
 # ---------- Preflight ----------
 
-if [[ ! -f "$DMG_PATH" ]]; then
-    echo "error: DMG not found at $DMG_PATH" >&2
+if [[ ! -f "$ARTIFACT_PATH" ]]; then
+    echo "error: updater artifact not found at $ARTIFACT_PATH" >&2
     echo "  did you run 'npm run tauri build' first?" >&2
+    echo "  the macOS updater target produces .app.tar.gz alongside the .dmg." >&2
     exit 2
 fi
 
@@ -104,8 +119,8 @@ fi
 
 # ---------- Compute hash ----------
 
-echo "info: computing SHA-256 of $(basename "$DMG_PATH")..." >&2
-SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
+echo "info: computing SHA-256 of $(basename "$ARTIFACT_PATH")..." >&2
+SHA256=$(shasum -a 256 "$ARTIFACT_PATH" | awk '{print $1}')
 echo "info: sha256 = $SHA256" >&2
 
 # ---------- Sign ----------
@@ -114,14 +129,14 @@ echo "info: sha256 = $SHA256" >&2
 # the signature output, then read the .minisig file back into the
 # manifest JSON. The trusted comment is a freeform field we set to the
 # version + build date for audit traceability.
-SIGNATURE_FILE="${DMG_PATH}.minisig"
+SIGNATURE_FILE="${ARTIFACT_PATH}.minisig"
 TRUSTED_COMMENT="brew-browser ${VERSION} ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
 
 # Remove any stale .minisig so a repeat run doesn't merge two signatures.
 rm -f "$SIGNATURE_FILE"
 
-echo "info: signing $(basename "$DMG_PATH") with minisign..." >&2
-if ! minisign -Sm "$DMG_PATH" -s "$KEY_PATH" -t "$TRUSTED_COMMENT" >/dev/null; then
+echo "info: signing $(basename "$ARTIFACT_PATH") with minisign..." >&2
+if ! minisign -Sm "$ARTIFACT_PATH" -s "$KEY_PATH" -t "$TRUSTED_COMMENT" >/dev/null; then
     echo "error: minisign signing failed" >&2
     exit 4
 fi
@@ -154,7 +169,7 @@ mkdir -p "$DIST_DIR"
 # the manifest generator and the release notes editorial step separate
 # is the simpler shape than wiring CHANGELOG parsing here.
 PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-URL="https://github.com/msitarzewski/brew-browser/releases/download/v${VERSION}/brew-browser_${VERSION}_aarch64.dmg"
+URL="https://github.com/msitarzewski/brew-browser/releases/download/v${VERSION}/${ARTIFACT_RELEASE_NAME}"
 
 cat > "$MANIFEST_PATH" <<EOF
 {
@@ -183,5 +198,5 @@ echo "next step (run manually):"
 echo "  rsync -av $MANIFEST_PATH umacbookpro:Sites/brew-browser/updater.json"
 echo ""
 echo "verify before publishing:"
-echo "  shasum -a 256 $DMG_PATH"
-echo "  minisign -Vm $DMG_PATH -P \"\$(cat ~/.config/brew-browser/updater.pub)\""
+echo "  shasum -a 256 $ARTIFACT_PATH"
+echo "  minisign -Vm $ARTIFACT_PATH -P \"\$(cat ~/.config/brew-browser/updater.pub)\""

@@ -25,7 +25,7 @@
  *     to surface inline with a "Try again" button.
  */
 
-import { updateCheckNow, updateInstall, updateSkip } from "$lib/api";
+import { updateCheckNow, updateInstall, updateRelaunch, updateSkip } from "$lib/api";
 import { isBrewError, brewErrorMessage, type UpdateInfo } from "$lib/types";
 
 class UpdaterStore {
@@ -50,11 +50,10 @@ class UpdaterStore {
   installing: boolean = $state(false);
 
   /** True after a successful install. Surfaced as a "Relaunch now"
-      affordance in the Settings card. The actual relaunch is a
-      backend concern — clicking the button calls back into
-      `updateInstall(version)` is wrong; the backend's install
-      command already handles the relaunch step, so this flag just
-      indicates "the install finished, the new app is on disk". */
+      affordance in the Settings card. The Settings card's button
+      calls `relaunch()` which fires the `update_relaunch` IPC; the
+      backend schedules `tauri::AppHandle::restart()` on a short
+      delay so the IPC response arrives before the process dies. */
   installComplete: boolean = $state(false);
 
   /** Human-readable error from the most recent op (`checkNow` or
@@ -79,15 +78,15 @@ class UpdaterStore {
       this.lastChecked = Date.now();
       switch (outcome.kind) {
         case "available":
-          this.available = outcome.info;
+          this.available = {
+            version: outcome.version,
+            currentVersion: outcome.currentVersion,
+            notes: outcome.notes,
+            pubDate: outcome.pubDate,
+            skipped: outcome.skipped,
+          };
           break;
         case "upToDate":
-          this.available = null;
-          break;
-        case "blocked":
-          // Belt-and-suspenders — backend should error rather than
-          // returning blocked, but if it ever does we treat it as
-          // "nothing to show".
           this.available = null;
           break;
       }
@@ -161,6 +160,28 @@ class UpdaterStore {
       // Best-effort: don't restore the indicator on failure (the user
       // explicitly asked to dismiss; better to keep their click than
       // surface a confusing "we couldn't dismiss" toast).
+      if (isBrewError(e)) {
+        this.error = brewErrorMessage(e);
+      } else {
+        this.error = String(e);
+      }
+    }
+  }
+
+  /**
+   * Relaunch the app after a successful install. Fires the backend's
+   * `update_relaunch` IPC, which schedules `tauri::AppHandle::restart()`
+   * on a short delay so the IPC response arrives before the process
+   * dies. The renderer's pending `await` is expected to be torn down
+   * mid-call — we don't wait on it.
+   */
+  async relaunch(): Promise<void> {
+    try {
+      await updateRelaunch();
+    } catch (e) {
+      // The process may have already started restarting and the IPC
+      // socket closed mid-call. Treat any error here as benign — if
+      // the restart actually failed, the user will notice immediately.
       if (isBrewError(e)) {
         this.error = brewErrorMessage(e);
       } else {

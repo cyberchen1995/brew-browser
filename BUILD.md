@@ -141,14 +141,22 @@ You only do this once per maintainer machine. The keypair lets your release buil
 
 ### Per-release manifest publishing flow
 
-Every release cuts a `.dmg` (via `./tools/build/sign-and-notarize.sh`) and then publishes an updater manifest so existing installations can discover the new version. The manifest is a small JSON file served from `https://brew-browser.zerologic.com/updater.json` (Caddy on umbp); end-user installs poll it on the configurable cadence (manual, weekly, or daily).
+Every release cuts **two** artifacts:
+- `brew-browser_X.Y.Z_aarch64.dmg` — for fresh user installs (drag-to-Applications).
+- `brew-browser.app.tar.gz` (in `src-tauri/target/release/bundle/macos/`) — for the auto-updater. **The Tauri updater plugin's macOS install path requires a gzipped tar of the `.app` bundle**, not the `.dmg`. Feeding the plugin a `.dmg` results in `"invalid gzip"` on every install attempt.
+
+Both are produced by a single `npm run tauri build` invocation when `bundle.targets` includes `"all"` (or explicitly lists `"app"` + `"dmg"`). You upload both to the GitHub Release; only the `.app.tar.gz` is referenced by `updater.json`.
+
+The manifest itself is a small JSON file served from `https://brew-browser.zerologic.com/updater.json` (Caddy on umbp); end-user installs poll it on the configurable cadence (manual, weekly, or daily).
 
 1. **Cut the release build first.** Per the "Build it" section above:
    ```sh
    source ~/.config/brew-browser/signing.env
    ./tools/build/sign-and-notarize.sh
    ```
-   Produces `src-tauri/target/release/bundle/dmg/brew-browser_X.Y.Z_aarch64.dmg`, signed by Apple and notarized.
+   Produces:
+   - `src-tauri/target/release/bundle/dmg/brew-browser_X.Y.Z_aarch64.dmg` (Apple-signed + notarized)
+   - `src-tauri/target/release/bundle/macos/brew-browser.app.tar.gz` (the updater artifact)
 
 2. **Generate the updater manifest** with the version you just built:
    ```sh
@@ -156,23 +164,32 @@ Every release cuts a `.dmg` (via `./tools/build/sign-and-notarize.sh`) and then 
    ```
 
    The script:
-   - Locates the `.dmg` at the expected path (`src-tauri/target/release/bundle/dmg/brew-browser_<version>_aarch64.dmg`)
-   - Computes the `sha256` of the `.dmg`
-   - Signs the `.dmg` with minisign using `~/.config/brew-browser/updater.key`
-   - Emits `updater.json` in the repo root (or wherever the script is configured to write — check the script's `--help`) in the shape Tauri's plugin expects (see "Manifest format" below)
+   - Locates the `.app.tar.gz` at `src-tauri/target/release/bundle/macos/brew-browser.app.tar.gz`
+   - Computes its `sha256`
+   - Signs it with minisign using `~/.config/brew-browser/updater.key`
+   - Emits `dist/updater.json` in the shape Tauri's plugin expects (see "Manifest format" below)
    - Echoes the deploy command for you to run by hand
 
-3. **Deploy the manifest** to the umbp host. The script will print the exact rsync command; run it yourself so the deploy step stays a deliberate action:
+3. **Upload both artifacts to the GitHub Release.** Rename `brew-browser.app.tar.gz` to the versioned form referenced by the manifest:
    ```sh
-   rsync -avz updater.json michael@umacbookpro:Sites/brew-browser/updater.json
+   gh release create v0.3.0 \
+     src-tauri/target/release/bundle/dmg/brew-browser_0.3.0_aarch64.dmg \
+     src-tauri/target/release/bundle/macos/brew-browser.app.tar.gz#brew-browser_0.3.0_aarch64.app.tar.gz \
+     --notes-file CHANGELOG.md
+   ```
+   The `#newname` syntax tells `gh` to upload the file under a different name in the release. The manifest URL points at `brew-browser_0.3.0_aarch64.app.tar.gz`.
+
+4. **Deploy the manifest** to the umbp host. The script will print the exact rsync command; run it yourself so the deploy step stays a deliberate action:
+   ```sh
+   rsync -avz dist/updater.json michael@umacbookpro:Sites/brew-browser/updater.json
    ```
 
-4. **Verify the manifest is live:**
+5. **Verify the manifest is live:**
    ```sh
    curl -s https://brew-browser.zerologic.com/updater.json | jq
    ```
 
-   Confirm the `version` field matches the one you just shipped and the `url` points at the GitHub Releases asset for that version. If `jq` complains, the manifest didn't deploy cleanly; re-run rsync.
+   Confirm the `version` field matches what you just shipped and the `url` points at the GitHub Releases `.app.tar.gz` asset for that version. If `jq` complains, the manifest didn't deploy cleanly; re-run rsync.
 
 ### Manifest format
 
@@ -186,8 +203,8 @@ Tauri's updater plugin expects this shape. The script generates it for you — b
   "platforms": {
     "darwin-aarch64": {
       "signature": "<minisign signature, single-line base64>",
-      "url": "https://github.com/msitarzewski/brew-browser/releases/download/v0.3.0/brew-browser_0.3.0_aarch64.dmg",
-      "sha256": "<hex digest of the .dmg>"
+      "url": "https://github.com/msitarzewski/brew-browser/releases/download/v0.3.0/brew-browser_0.3.0_aarch64.app.tar.gz",
+      "sha256": "<hex digest of the .app.tar.gz>"
     }
   }
 }
@@ -199,9 +216,9 @@ Notes on the fields:
 - **`notes`** — short text. We point at the GitHub release page rather than inlining release notes; keeps the manifest small and lets us edit notes after publish without re-signing.
 - **`pub_date`** — RFC 3339 UTC timestamp. Tauri uses this for display only.
 - **`platforms.darwin-aarch64`** — Apple Silicon macOS. We don't ship Intel builds; if we ever do, add a `darwin-x86_64` sibling.
-- **`signature`** — the minisign signature over the `.dmg` bytes. Tauri's plugin verifies this against the `PUB_KEY` const baked into the binary; mismatch aborts the install with no on-disk side effects.
-- **`url`** — direct download URL for the `.dmg`. Constrained by the artifact-host allowlist in the plugin config (only `github.com` and `objects.githubusercontent.com` are accepted).
-- **`sha256`** — hex digest. The plugin checks this *first* (cheap) before invoking minisign (more expensive); a mismatch aborts before any signature math.
+- **`signature`** — the minisign signature over the `.app.tar.gz` bytes. Tauri's plugin verifies this against the `PUB_KEY` const baked into the binary; mismatch aborts the install with no on-disk side effects.
+- **`url`** — direct download URL for the `.app.tar.gz` (NOT the `.dmg`). The plugin unpacks the gzipped tar in place; feeding it a `.dmg` fails with `"invalid gzip"`. Constrained by the artifact-host allowlist in the plugin config (only `github.com` and `objects.githubusercontent.com` are accepted).
+- **`sha256`** — hex digest of the `.app.tar.gz` bytes. The plugin checks this *first* (cheap) before invoking minisign (more expensive); a mismatch aborts before any signature math.
 
 ### If you forget to publish the manifest
 
@@ -213,10 +230,10 @@ The release flow now involves two independent cryptographic signatures, and it's
 
 | Signature | Purpose | Key location | Verified by |
 |-----------|---------|--------------|-------------|
-| **Apple Developer ID + notarization** | Proves the `.dmg` was built by an Apple-registered developer (you) and passed Apple's malware scan | Login keychain + `signing.env` | macOS Gatekeeper at install time |
-| **Minisign signature** | Proves the `.dmg` came from your specific brew-browser maintainer keypair (not anyone else who could host a file at the manifest URL) | `~/.config/brew-browser/updater.key` | `tauri-plugin-updater` at install time, against the `PUB_KEY` in the running binary |
+| **Apple Developer ID + notarization** | Proves the `.dmg` (fresh-install artifact) was built by an Apple-registered developer (you) and passed Apple's malware scan | Login keychain + `signing.env` | macOS Gatekeeper at install time |
+| **Minisign signature** | Proves the `.app.tar.gz` (auto-update artifact) came from your specific brew-browser maintainer keypair (not anyone else who could host a file at the manifest URL) | `~/.config/brew-browser/updater.key` | `tauri-plugin-updater` at install time, against the `PUB_KEY` in the running binary |
 
-Both are needed. Apple's signature alone doesn't help if someone with a Developer ID account compromises your manifest endpoint and serves a `.dmg` they signed themselves — minisign closes that gap. Minisign alone doesn't help with Gatekeeper warnings — Apple's notarization closes that. Skip either and your release is either visibly broken (Gatekeeper warning, no notarization) or invisibly broken (auto-update install fails, no minisign signature).
+Both are needed but cover **different artifacts**: Apple's signature lives on the `.dmg` and protects the fresh-install path; minisign lives on the `.app.tar.gz` and protects the auto-update path. Compromising your manifest endpoint without the minisign key still gets blocked at the plugin; compromising the `.dmg` distribution without the Developer ID still gets blocked at Gatekeeper. Skip either and one of the two install paths breaks (visibly via Gatekeeper warning, or invisibly via auto-update install failure).
 
 ## GitHub OAuth App (one-time setup before release)
 

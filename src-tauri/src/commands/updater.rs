@@ -404,7 +404,19 @@ pub async fn run_install(
     // performs the download + sha256 verification (when the manifest
     // carries a hash) + minisign verification + atomic .app bundle
     // replacement in a single call.
-    backend.download_and_install(version).await
+    backend.download_and_install(version).await?;
+
+    // 4. Clear the cached available payload so a re-render of the
+    // indicator + the Settings card doesn't re-offer the same
+    // install. The new binary is on disk; the only remaining action
+    // is the relaunch, which `update_relaunch` handles.
+    {
+        let mut guard = state.updater_state.write().await;
+        guard.cached_available = None;
+        guard.last_outcome = Some(UpdateCheckOutcome::UpToDate);
+    }
+
+    Ok(())
 }
 
 // ---------- IPC commands ----------
@@ -462,21 +474,18 @@ pub async fn update_install(
     }
 }
 
-/// Skip a specific update version. Pushes onto the FIFO-capped skip
-/// list in settings (10 entries max, oldest evicted, dedup-and-move-to-
-/// tail per `Settings::push_skipped_version`) and clears the cached
-/// "available" entry when its version matches — so the title-bar
-/// indicator disappears immediately on the next reactive render.
+/// Inner: record a skip against the supplied AppState. Extracted so
+/// unit tests can exercise the Corrupt-settings safety branch without
+/// going through the Tauri State wrapper.
 ///
-/// No `require_network` gate: skipping an update is a purely local
-/// state mutation that records a user preference. It doesn't reach
-/// the network. Sane to allow even when Offline Mode is on (the user
-/// might be reviewing accumulated update notices while offline).
-#[tauri::command]
-pub async fn update_skip(
-    version: String,
-    state: State<'_, AppState>,
-) -> Result<(), BrewError> {
+/// ⚠️ Corrupt-settings safety: when settings are Corrupt, the app is
+/// in fail-closed paranoid-on state (require_network denies all
+/// outbound). Writing `Settings::default()` here would silently revoke
+/// that lockdown (paranoid_mode = false in defaults). Refuse the skip
+/// instead — the frontend's optimistic UI clear of `available` still
+/// hides the indicator for this session; the user must reset settings
+/// before a persisted skip is possible.
+pub async fn run_skip(state: &AppState, version: &str) -> Result<(), BrewError> {
     use crate::commands::settings::{persist, SettingsLoadState};
 
     // Validate the version arg — defensive against UI passing garbage.
@@ -490,17 +499,30 @@ pub async fn update_skip(
     //    dedupe internally). Take a snapshot to hand to persist().
     let updated_settings = {
         let guard = state.settings.read().await;
-        let mut s = match &*guard {
-            SettingsLoadState::Loaded(s) => s.clone(),
-            // Even when settings are FirstLaunch or Corrupt, we still
-            // honor a skip — start from defaults and write the new
-            // skip in. The persist call will materialize the file.
-            SettingsLoadState::FirstLaunch | SettingsLoadState::Corrupt { .. } => {
-                crate::commands::settings::Settings::default()
+        match &*guard {
+            SettingsLoadState::Loaded(s) => {
+                let mut s = s.clone();
+                s.push_skipped_version(version.to_string());
+                s
             }
-        };
-        s.push_skipped_version(version.clone());
-        s
+            SettingsLoadState::FirstLaunch => {
+                // No settings file yet — defaults are correct (paranoid
+                // OFF matches "user has never configured anything"),
+                // and materializing the file with the skip recorded is
+                // the right next step.
+                let mut s = crate::commands::settings::Settings::default();
+                s.push_skipped_version(version.to_string());
+                s
+            }
+            SettingsLoadState::Corrupt { message } => {
+                return Err(BrewError::Internal {
+                    message: format!(
+                        "cannot record update skip while settings file is unreadable \
+                         ({message}); reset settings from Settings → Network first"
+                    ),
+                });
+            }
+        }
     };
     let clamped = persist(&state.app_data_dir, updated_settings).await?;
     {
@@ -525,6 +547,56 @@ pub async fn update_skip(
     }
 
     Ok(())
+}
+
+/// Skip a specific update version. Pushes onto the FIFO-capped skip
+/// list in settings (10 entries max, oldest evicted, dedup-and-move-to-
+/// tail per `Settings::push_skipped_version`) and clears the cached
+/// "available" entry when its version matches — so the title-bar
+/// indicator disappears immediately on the next reactive render.
+///
+/// No `require_network` gate: skipping an update is a purely local
+/// state mutation that records a user preference. It doesn't reach
+/// the network. Sane to allow even when Offline Mode is on (the user
+/// might be reviewing accumulated update notices while offline).
+#[tauri::command]
+pub async fn update_skip(
+    version: String,
+    state: State<'_, AppState>,
+) -> Result<(), BrewError> {
+    run_skip(&state, &version).await
+}
+
+/// Relaunch the running app process so a freshly-installed update
+/// becomes the active binary. The plugin's macOS install path replaces
+/// the .app bundle but does not auto-restart the running process; this
+/// command bridges that gap.
+///
+/// The restart itself is fired on a short delay so the IPC response
+/// arrives at the renderer before the process dies. `tauri::AppHandle::
+/// restart()` is `-> !` — calling it directly from the command body
+/// would tear the IPC socket down mid-response.
+///
+/// No `require_network` gate: this is a purely local process action.
+#[tauri::command]
+pub async fn update_relaunch(app: tauri::AppHandle) -> Result<(), BrewError> {
+    #[cfg(test)]
+    {
+        let _ = app;
+        Err(BrewError::Internal {
+            message: "update_relaunch is not callable in tests".into(),
+        })
+    }
+    #[cfg(not(test))]
+    {
+        tauri::async_runtime::spawn(async move {
+            // 50ms is enough for the JSON IPC response to make it to
+            // the renderer before the process restarts.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            app.restart();
+        });
+        Ok(())
+    }
 }
 
 // ---------- Auto-check scheduler ----------
@@ -929,6 +1001,85 @@ mod tests {
             }
             other => panic!("expected HashMismatch, got {other:?}"),
         }
+    }
+
+    /// Phase 15 fix-up — `run_skip` MUST NOT persist `Settings::default()`
+    /// when the in-memory state is Corrupt. Doing so silently revokes the
+    /// paranoid-on lockdown that Corrupt settings imply. Refusal with a
+    /// typed error is the correct behaviour.
+    #[tokio::test]
+    async fn skip_refuses_on_corrupt_settings() {
+        let state = build_state_with(SettingsLoadState::Corrupt {
+            message: "synthetic test corruption".into(),
+        })
+        .await;
+
+        let r = run_skip(&state, "9.9.9").await;
+        match r {
+            Err(BrewError::Internal { message }) => {
+                assert!(
+                    message.contains("unreadable"),
+                    "expected unreadable message, got: {message}"
+                );
+                assert!(
+                    message.contains("reset"),
+                    "expected reset guidance, got: {message}"
+                );
+            }
+            other => panic!("expected Internal error refusing skip, got {other:?}"),
+        }
+
+        // Settings must still be Corrupt — refused skip must NOT have
+        // overwritten the in-memory state.
+        let guard = state.settings.read().await;
+        match &*guard {
+            SettingsLoadState::Corrupt { .. } => {} // expected
+            other => panic!("settings state was mutated by refused skip: {other:?}"),
+        }
+    }
+
+    /// Phase 15 fix-up — invalid version argument rejected with
+    /// InvalidArgument, regardless of settings state.
+    #[tokio::test]
+    async fn skip_rejects_empty_version() {
+        let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
+        let r = run_skip(&state, "").await;
+        match r {
+            Err(BrewError::InvalidArgument { .. }) => {}
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    /// Phase 15 fix-up — `run_install` clears `cached_available` after a
+    /// successful install so the indicator + Settings card don't
+    /// re-offer the same install on the next render.
+    #[tokio::test]
+    async fn install_clears_cached_available_on_success() {
+        let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
+        let backend = MockBackend::install_returning(
+            Ok(Some(CachedUpdate {
+                version: "9.9.9".into(),
+                current_version: current_app_version().to_string(),
+                notes: None,
+                pub_date: None,
+            })),
+            Ok(()),
+        );
+        run_check(&state, &backend).await.expect("check");
+        // Sanity: cache populated by the check.
+        {
+            let guard = state.updater_state.read().await;
+            assert!(guard.cached_available.is_some());
+        }
+
+        run_install(&state, &backend, "9.9.9").await.expect("install");
+
+        let guard = state.updater_state.read().await;
+        assert!(
+            guard.cached_available.is_none(),
+            "cached_available must be cleared after successful install"
+        );
+        assert_eq!(guard.last_outcome, Some(UpdateCheckOutcome::UpToDate));
     }
 
     /// Install blocked by paranoid mode → ParanoidModeBlocked.

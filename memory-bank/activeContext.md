@@ -1,7 +1,7 @@
 # Active Context
 
-**Date:** 2026-05-25 (v0.3.0 prep, late-late session — about to compact)
-**State:** Phase 15 implementation merged + all 4 GitHub bug fixes from issue #1 + GitHub Octocat chip + actionable re-auth toast all in working tree. Phase 15 has 5 CRITICAL findings still pending. Everything else is shippable.
+**Date:** 2026-05-25 (v0.3.0 prep, post-compact follow-up session)
+**State:** Phase 15 fix-up complete — all 5 CRITICAL findings resolved + 1 IMPORTANT (cached_available clear). v0.3.0 is now blocker-clean. Remaining v0.3.0 work is release plumbing (minisign keypair, version bump, build, ship).
 
 ## Repo
 
@@ -15,19 +15,19 @@
 
 ## What landed this session (uncommitted, ~30 files)
 
-### Phase 15 — In-app updater + Offline Mode UI rename (NEEDS-WORK)
+### Phase 15 — In-app updater + Offline Mode UI rename (FIX-UP DONE)
 
 4 parallel agents (Backend Architect + Frontend Developer #1 + Frontend Developer #2 for rename sweep + Technical Writer) plus a Lead-written bridging `update_skip` IPC. **+34 backend tests** (411 → 445). All `npm run check` + `cargo check` + `cargo clippy -D warnings` clean.
 
-Then 2 review agents (Code Reviewer + Security Engineer) returned a verdict of **NEEDS-WORK with 5 CRITICAL findings** before v0.3.0 ship:
+2 review agents (Code Reviewer + Security Engineer) returned **NEEDS-WORK with 5 CRITICAL findings**; all 5 resolved in this session's fix-up pass (task #16, **+3 backend tests**, 447 → 450). Full detail in `tasks/2026-05/16-phase-15-fixup-pass.md`:
 
-1. IPC wire-shape mismatch on `UpdateCheckOutcome::Available` — backend ships flat `{kind, version, currentVersion, notes, pubDate, skipped}`; frontend reads `outcome.info.{version, notesUrl, sha256}`. Frontend reads `undefined`. Indicator renders broken.
-2. "Relaunch now" button calls `updater.install(version)` again instead of `app.restart()`. Infinite re-install loop.
-3. Manifest artifact format mismatch — plugin expects `.app.tar.gz` (gzipped tar of `.app`); build script and `BUILD.md` say `.dmg`. Every install attempt fails with "invalid gzip" error.
-4. New `BrewError` variants (`HashMismatch`, `SignatureVerificationFailed`, `DowngradeRejected`) missing from frontend `BrewErrorPayload` union — security-relevant errors silently suppressed.
-5. **`update_skip` revokes paranoid mode on Corrupt settings** ⚠️ — Lead's bridging command writes `Settings::default()` (paranoid=false) when settings are Corrupt. Dismissing an update notice silently disables the network kill switch.
+1. ✅ IPC wire-shape mismatch — frontend `UpdateCheckOutcome` flattened to match backend's flat `{kind, version, currentVersion, notes, pubDate, skipped}`; `blocked` variant removed (Offline Mode surfaces as `ParanoidModeBlocked` error). `UpdateInfo` repurposed as the store's internal shape (no more invented `notesUrl`/`sha256`).
+2. ✅ Relaunch button — new `update_relaunch` IPC that spawns a 50ms-delayed `app.restart()`; frontend `updater.relaunch()` wires the button. `run_install` now clears `cached_available` post-success.
+3. ✅ Manifest artifact format — `publish-manifest.sh` operates on `bundle/macos/brew-browser.app.tar.gz`, signs and hashes that, emits a URL pointing at the GH release asset under `brew-browser_<v>_aarch64.app.tar.gz`. `BUILD.md` rewritten to cover the two-artifact release (`.dmg` for fresh installs + `.app.tar.gz` for auto-updater).
+4. ✅ Missing error variants — `hash_mismatch`, `signature_verification_failed`, `downgrade_rejected` added to `BrewErrorPayload` and `brewErrorMessage`.
+5. ✅ `update_skip` Corrupt-settings safety — refactored into `run_skip` inner; Corrupt branch refuses with typed error; `FirstLaunch` materializes defaults with the skip (correct first-write behavior). +2 backend tests pin the new behavior.
 
-All five are well-scoped local fixes; ~2-3 hours of work per Code Reviewer estimate. See task **#41** + the task notes in `tasks/2026-05/13-phase-15-updater-and-offline-mode-rename.md`.
+**Outstanding IMPORTANT findings** (not blockers for v0.3.0; tracked in task #16's "Outstanding" section): the central `paranoid_mode_blocked` toast still reads "Paranoid mode is on" (wording-only sweep), manifest size caps + allowlist not enforceable through plugin 2.10.1, placeholder pubkey has no startup guard, scheduler `last_checked_at` is in-memory only.
 
 ### Issue #1 fixes (4 cascading bugs)
 
@@ -47,11 +47,12 @@ Spent ~6 hours debugging the toast cascade from issue #1. The chase:
 
 ## Tests & lint (current)
 
-- `cargo test`: **447 passed**, 0 failed, 6 ignored (445 → 447, +2 new for per-action scopes)
+- `cargo test`: **450 passed**, 0 failed, 6 ignored (447 → 450, +3 new for Phase 15 fix-up: `skip_refuses_on_corrupt_settings`, `skip_rejects_empty_version`, `install_clears_cached_available_on_success`)
 - `cargo clippy --all-targets -- -D warnings`: clean
 - `cargo check`: clean
 - `npm run check`: 0 errors, 3 pre-existing warnings (SettingsSectionGitHub unused-CSS, tsconfig-node-types)
 - `npm run build`: clean
+- `bash -n tools/release/publish-manifest.sh`: clean
 - All diagnostic instrumentation reverted (no `[diag]` / `console.trace` left in code)
 
 ## Working tree (~30 files)

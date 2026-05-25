@@ -597,36 +597,52 @@ export interface CreatedIssue {
 
 /**
  * A newer brew-browser version surfaced by the manifest at
- * `brew-browser.zerologic.com/updater.json`. Backend resolves the
- * manifest, performs the version comparison, and (only when a newer
- * release exists) returns this shape inside an `available` outcome.
+ * `brew-browser.zerologic.com/updater.json`. Held by the updater store
+ * once a check returns `available`. Matches the camelCase wire shape
+ * the backend's `UpdateCheckOutcome::Available` flattens onto when
+ * serde-tagged with `kind`.
  *
- * `sha256` is the lowercase hex digest of the .dmg. The user can
- * verify out-of-band against the published manifest; the backend
- * also re-checks this before invoking minisign signature verification.
+ * `notes` is the raw `notes` field from the manifest — free-form text
+ * (we publish a "See release notes at <url>" sentence by default), so
+ * UI renders it as-is.
+ *
+ * No `sha256` here: the manifest sha256 is verified inside the plugin
+ * before signature verification; never exposed to the renderer.
  */
 export interface UpdateInfo {
   version: string;
-  notesUrl: string;
-  sha256: string;
+  currentVersion: string;
+  notes: string | null;
+  pubDate: string | null;
+  skipped: boolean;
 }
 
 /**
- * Tagged union returned by `update_check_now`. The frontend store
- * narrows on `kind` to drive the title-bar indicator + the Settings
- * card.
+ * Tagged union returned by `update_check_now`. Matches the backend's
+ * `UpdateCheckOutcome` serde shape exactly: `{ kind, ...fields }` with
+ * the `Available` fields flattened next to the discriminator (not
+ * nested under `.info`). The store narrows on `kind` and lifts the
+ * flat fields into the strongly-typed `UpdateInfo` for downstream
+ * consumers.
  *
  *   - `upToDate` — manifest version ≤ running version, nothing to show.
  *   - `available` — newer version exists (and isn't on the user's
  *     skip-list); UI surfaces the indicator + the install action.
- *   - `blocked` — Offline Mode is on; the typed `BrewError` variant
- *     is the authoritative signal (the store maps it into this kind
- *     for UI ergonomics).
+ *
+ * `blocked` is **not** a wire variant — Offline Mode surfaces as
+ * `BrewError::ParanoidModeBlocked` instead, so the toast routes
+ * through the same channel as every other gated call.
  */
 export type UpdateCheckOutcome =
   | { kind: "upToDate" }
-  | { kind: "available"; info: UpdateInfo }
-  | { kind: "blocked" };
+  | {
+      kind: "available";
+      version: string;
+      currentVersion: string;
+      notes: string | null;
+      pubDate: string | null;
+      skipped: boolean;
+    };
 
 // =========================================================
 // 3.3 Error model
@@ -648,7 +664,10 @@ export type BrewErrorPayload =
   | { code: "github_rate_limited"; resetAt: number }
   | { code: "keychain_unavailable"; message: string }
   | { code: "auth_required" }
-  | { code: "scope_required"; scope: string };
+  | { code: "scope_required"; scope: string }
+  | { code: "hash_mismatch"; expected: string; actual: string }
+  | { code: "signature_verification_failed"; message: string }
+  | { code: "downgrade_rejected"; current: string; target: string };
 
 /** Type-narrowing helper: is the thrown value a BrewErrorPayload? */
 export function isBrewError(e: unknown): e is BrewErrorPayload {
@@ -686,6 +705,12 @@ export function brewErrorMessage(e: BrewErrorPayload): string {
       return "Sign in to GitHub to use this feature.";
     case "scope_required":
       return `GitHub permission "${e.scope}" required. Sign in again to grant it.`;
+    case "hash_mismatch":
+      return `Update aborted: downloaded artifact hash didn't match the manifest (expected ${e.expected.slice(0, 12)}…, got ${e.actual.slice(0, 12)}…).`;
+    case "signature_verification_failed":
+      return `Update aborted: signature verification failed (${e.message}).`;
+    case "downgrade_rejected":
+      return `Update refused: ${e.target} is not newer than the installed version (${e.current}).`;
   }
 }
 

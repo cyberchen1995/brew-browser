@@ -62,13 +62,26 @@
     void updater.install(info.version);
   }
 
+  function onRelaunch() {
+    void updater.relaunch();
+  }
+
   function onTryAgain() {
     updater.clearError();
     if (info) void updater.install(info.version);
   }
 
+  /** Always-correct release notes URL derived from the version tag.
+      The manifest's free-form `notes` field is rendered inline below;
+      this link goes to the canonical GH release page so users can
+      see the changelog + assets even when the manifest snippet is
+      terse. */
+  let releaseNotesUrl = $derived(
+    info ? `https://github.com/msitarzewski/brew-browser/releases/tag/v${info.version}` : null,
+  );
+
   function onOpenReleaseNotes() {
-    if (info?.notesUrl) void safeOpenUrl(info.notesUrl);
+    if (releaseNotesUrl) void safeOpenUrl(releaseNotesUrl);
   }
 
   /** Format the last-checked timestamp for the curious user. Locale-
@@ -168,7 +181,7 @@
         <button
           type="button"
           class="btn-primary"
-          onclick={onInstall}
+          onclick={onRelaunch}
           title="Relaunch into the freshly-installed brew-browser"
         >
           <RotateCw size={14} /> Relaunch now
@@ -204,11 +217,8 @@
         </button>
       {/if}
 
-      {#if info.sha256}
-        <p class="sha-hint">
-          <span class="sha-label">SHA-256</span>
-          <code>{info.sha256}</code>
-        </p>
+      {#if info.notes}
+        <p class="notes-body">{info.notes}</p>
       {/if}
     </div>
   {/if}
@@ -402,28 +412,13 @@
   .result.success { color: #2e7d32; }
   .result.error { color: var(--color-warning-strong, #b45309); }
 
-  /* SHA-256 disclosure — small, monospace, for the security-pro user. */
-  .sha-hint {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+  /* Release notes body — the manifest's free-form `notes` text. */
+  .notes-body {
     margin: 0;
     font-size: var(--text-body-sm);
-    color: var(--color-text-muted);
-  }
-  .sha-label {
-    font-weight: var(--fw-medium);
     color: var(--color-text-secondary);
-  }
-  .sha-hint code {
-    font-family: var(--font-mono);
-    font-size: var(--text-mono);
-    color: var(--color-text-secondary);
-    word-break: break-all;
-    padding: 2px 6px;
-    background: var(--color-surface-raised);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
+    line-height: var(--lh-snug);
+    white-space: pre-wrap;
   }
 
   /* Spinner used inline in buttons and progress rows. */

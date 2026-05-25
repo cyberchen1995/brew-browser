@@ -638,6 +638,20 @@ export function updateSkip(version: string): Promise<void> {
   return invoke<void>("update_skip", { version });
 }
 
+/**
+ * Restart the running brew-browser process so the freshly-installed
+ * .app picks up. Called from the "Relaunch now" affordance in the
+ * Settings card after `updateInstall` resolves.
+ *
+ * The backend schedules `tauri::AppHandle::restart()` on a short
+ * timer so the IPC response arrives before the process dies; the
+ * renderer's pending `await` is expected to be torn down by the
+ * restart (caller treats any error as benign).
+ */
+export function updateRelaunch(): Promise<void> {
+  return invoke<void>("update_relaunch");
+}
+
 // ============================================================
 // Re-exports for convenience
 // ============================================================
