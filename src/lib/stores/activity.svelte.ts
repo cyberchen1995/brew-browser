@@ -14,8 +14,10 @@ import { cancelJob } from "$lib/api";
 import type { ActivityJob, ActivityLine, BrewStreamEvent } from "$lib/types";
 
 const STORAGE_KEY = "brew-browser:activity:v1";
-/** Cap how many jobs we persist. Older drop off the tail. */
-const MAX_PERSISTED_JOBS = 50;
+/** Cap how many jobs we persist. Older drop off the tail.
+ *  Raised from 50 in earlier builds — most users never hit it, and
+ *  a fatter history is more useful than the storage saving. */
+const MAX_PERSISTED_JOBS = 200;
 /** Cap log lines per job to keep localStorage write cost bounded. */
 const MAX_LINES_PER_JOB = 500;
 /** How long to wait after a state change before writing to localStorage. */
@@ -47,9 +49,15 @@ class ActivityStore {
     this.hydrated = true;
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
+      if (!raw) {
+        console.info("[activity] hydrate: no persisted entry (first launch or storage cleared)");
+        return;
+      }
       const parsed = JSON.parse(raw) as PersistedShape;
-      if (!parsed || parsed.v !== 1 || !Array.isArray(parsed.jobs)) return;
+      if (!parsed || parsed.v !== 1 || !Array.isArray(parsed.jobs)) {
+        console.warn("[activity] hydrate: persisted entry has unexpected shape; ignoring");
+        return;
+      }
       // Any "running" job in persisted state died with the previous process —
       // mark it canceled so the UI doesn't show a phantom spinner.
       const restored: ActivityJob[] = parsed.jobs.map((j) =>
@@ -57,8 +65,13 @@ class ActivityStore {
       );
       this.jobs = restored;
       this.activeJobId = restored[0]?.jobId ?? null;
-    } catch {
-      // Corrupt entry — wipe so we don't keep failing to parse on each launch.
+      console.info(`[activity] hydrate: restored ${restored.length} job(s) from localStorage`);
+    } catch (e) {
+      console.warn(
+        `[activity] hydrate failed (corrupt entry): ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
       try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     }
   }
@@ -80,6 +93,11 @@ class ActivityStore {
   /**
    * Write current jobs to localStorage immediately. Truncates lines per job and
    * caps job count to keep storage bounded.
+   *
+   * On failure, logs a warning to the console (NOT a silent swallow) so a
+   * persistence regression — quota exhaustion, serialization failure, a
+   * webview-side storage policy quirk — is visible during dev/testing
+   * instead of presenting as "the activity log silently empties."
    */
   private persistNow(): void {
     if (typeof window === "undefined") return;
@@ -94,9 +112,12 @@ class ActivityStore {
         });
       const payload: PersistedShape = { v: 1, jobs: trimmed };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    } catch {
-      // Quota or transient error — drop silently. Worst case the user loses
-      // a few seconds of history if they reload right now.
+    } catch (e) {
+      console.warn(
+        `[activity] persistNow failed (jobs=${this.jobs.length}): ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
     }
   }
 
@@ -111,7 +132,10 @@ class ActivityStore {
     };
     this.jobs = [job, ...this.jobs];
     this.activeJobId = jobId;
-    this.schedulePersist();
+    // Persist IMMEDIATELY so even a hard kill within the 400ms
+    // debounce window leaves the job in the history. Streaming
+    // line bursts still ride the debounced path below.
+    this.persistNow();
   }
 
   handleEvent(evt: BrewStreamEvent) {
