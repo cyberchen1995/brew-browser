@@ -261,7 +261,7 @@ A placeholder `client_id` ships with the source tree (`Iv1.PLACEHOLDER_REPLACE_B
 
 If you fork brew-browser, repeat the steps above against your own GitHub account. Don't reuse the upstream `client_id` — it ties any sign-in attempts (and the resulting rate-limit consumption) back to the upstream maintainer's OAuth app.
 
-> See [`memory-bank/phase12-plan.md`](./memory-bank/phase12-plan.md) for the full design of the GitHub integration (anonymous tier, Device Flow, Keychain isolation, paranoid-mode gates).
+> See [`memory-bank/phases/phase12-plan.md`](../memory-bank/phases/phase12-plan.md) for the full design of the GitHub integration (anonymous tier, Device Flow, Keychain isolation, paranoid-mode gates).
 
 ## Catalog enrichment (Phase 13 — optional)
 
@@ -346,7 +346,7 @@ python tools/enrich/enrich.py --all
 After a successful run, commit the updated
 `src-tauri/data/enrichment.json.gz` alongside the catalog refresh.
 
-> See [`memory-bank/phase13-plan.md`](./memory-bank/phase13-plan.md) for the full design — tier structure, prompt strategy, AI-Features toggle UX, and the rationale for build-time-only LLM calls.
+> See [`memory-bank/phases/phase13-plan.md`](../memory-bank/phases/phase13-plan.md) for the full design — tier structure, prompt strategy, AI-Features toggle UX, and the rationale for build-time-only LLM calls.
 
 ## Unsigned builds (for testing only)
 
