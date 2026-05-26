@@ -244,6 +244,11 @@ export interface CatalogSummary {
 export interface CatalogEntrySummary {
   name: string;
   desc: string | null;
+  /** "Stable" version — what `brew install <name>` would pull right
+   *  now. From `Formula.versions_stable` (formulae) or `Cask.version`
+   *  (casks). Null for entries that genuinely have no stable value
+   *  (head-only formulae, version-less vintage casks). */
+  version: string | null;
   deprecated: boolean;
   disabled: boolean;
 }

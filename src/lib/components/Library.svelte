@@ -15,6 +15,7 @@
   import { categories } from "$lib/stores/categories.svelte";
   import { discover } from "$lib/stores/discover.svelte";
   import { library, type LibraryFilter } from "$lib/stores/library.svelte";
+  import { enrichment } from "$lib/stores/enrichment.svelte";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
   import type { Package } from "$lib/types";
 
@@ -96,7 +97,13 @@
     }
   }
 
-  onMount(() => { packages.load(); });
+  onMount(() => {
+    packages.load();
+    // Description column reads AI summaries from the enrichment bundle
+    // when present. Prime here so direct-to-Library cold opens light
+    // them up without a navigation detour.
+    enrichment.ensureLoaded();
+  });
 
   function openDetail(p: Package) {
     ui.selectPackage(p.name, p.kind);
@@ -207,6 +214,7 @@
       <div class="list-header" role="row">
         <span></span>
         <SortableHeader label="Name" sortKey="name" active={sortKey === "name"} dir={sortDir} onSort={changeSort} />
+        <span class="header-desc">Description</span>
         <SortableHeader label="Version" sortKey="version" active={sortKey === "version"} dir={sortDir} onSort={changeSort} />
         <SortableHeader label="Type" sortKey="kind" active={sortKey === "kind"} dir={sortDir} onSort={changeSort} />
         <SortableHeader label="Outdated" sortKey="outdated" active={sortKey === "outdated"} dir={sortDir} onSort={changeSort} />
@@ -338,9 +346,10 @@
   }
   .list-header {
     display: grid;
-    /* minmax(0, 1fr) on the name column so long package names don't push the
-       version/type/outdated cells rightward — matches PackageRow.svelte. */
-    grid-template-columns: 24px minmax(0, 1fr) 120px 80px 120px;
+    /* 6 cells matching PackageRow:
+       icon / NAME (1fr) / DESCRIPTION (2fr) / VERSION (120px) /
+       TYPE (80px) / OUTDATED (120px). */
+    grid-template-columns: 24px minmax(0, 1fr) minmax(0, 2fr) 120px 80px 120px;
     gap: var(--space-3);
     padding: var(--space-2) var(--space-3);
     background: var(--color-surface);
@@ -351,22 +360,36 @@
     overflow: hidden;
   }
   .list-header > * { min-width: 0; overflow: hidden; }
+  .header-desc {
+    font-size: var(--text-body-sm);
+    font-weight: var(--fw-medium);
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
 
   /* Match PackageRow's responsive column-drops so the header stays
-     aligned with the rows when the panel narrows (detail open + small
-     window). Sequences match exactly. */
-  @media (max-width: 880px) {
+     aligned with the rows when the panel narrows. */
+  @media (max-width: 1100px) {
+    .list-header {
+      grid-template-columns: 24px minmax(0, 1fr) minmax(0, 2fr) 120px 80px;
+    }
+    .list-header > :nth-child(6) { display: none; }
+  }
+  @media (max-width: 900px) {
     .list-header {
       grid-template-columns: 24px minmax(0, 1fr) 120px 80px;
     }
-    .list-header > :nth-child(5) { display: none; }
+    .list-header > :nth-child(3),
+    .list-header > :nth-child(6) { display: none; }
   }
   @media (max-width: 720px) {
     .list-header {
       grid-template-columns: 24px minmax(0, 1fr) 80px;
     }
     .list-header > :nth-child(3),
-    .list-header > :nth-child(5) { display: none; }
+    .list-header > :nth-child(4),
+    .list-header > :nth-child(6) { display: none; }
   }
   .list { display: flex; flex-direction: column; }
 </style>

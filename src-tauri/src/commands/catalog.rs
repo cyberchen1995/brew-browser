@@ -64,6 +64,11 @@ pub struct CatalogSummary {
 pub struct CatalogEntrySummary {
     pub name: String,
     pub desc: Option<String>,
+    /// "Stable" version string — what `brew install <name>` would pull.
+    /// For formulae this comes from `Formula.versions_stable`; for casks
+    /// it's the top-level `Cask.version`. Optional because some entries
+    /// (head-only formulae, vintage casks) genuinely have no value here.
+    pub version: Option<String>,
     pub deprecated: bool,
     pub disabled: bool,
 }
@@ -233,6 +238,7 @@ pub async fn catalog_formulae_summary(
         .map(|f| CatalogEntrySummary {
             name: f.name.clone(),
             desc: f.desc.clone(),
+            version: f.versions_stable.clone(),
             deprecated: f.deprecated,
             disabled: f.disabled,
         })
@@ -253,6 +259,7 @@ pub async fn catalog_casks_summary(
         .map(|c| CatalogEntrySummary {
             name: c.token.clone(),
             desc: c.desc.clone(),
+            version: c.version.clone(),
             deprecated: c.deprecated,
             disabled: c.disabled,
         })

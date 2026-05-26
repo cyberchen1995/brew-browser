@@ -22,6 +22,17 @@
     return enrichment.friendlyName(token);
   }
 
+  /** Description-column content. Preference order:
+   *    1. AI-generated 1-2 sentence summary (when AI Features is on +
+   *       token is in the enrichment bundle)
+   *    2. Upstream Homebrew `desc` (carried on `pkg.description` for
+   *       Library rows — populated by `brew info --installed --json=v2`)
+   *    3. null (empty cell)
+   *  Sync — both lookups read pre-loaded in-memory state. */
+  function descOf(): string | null {
+    return enrichment.summaryOf(pkg.name) ?? pkg.description ?? null;
+  }
+
   // Per-row icon state. We keep this row-local rather than reading
   // iconCache.cache directly so the row can reflect "loading" before the
   // first resolve, and we don't recompute the Map lookup on every keystroke
@@ -80,6 +91,7 @@
       <span class="friendly-subtitle">{friendlyOf(pkg.name)}</span>
     {/if}
   </span>
+  <span class="desc truncate text-muted" title={descOf() ?? ""}>{descOf() ?? ""}</span>
   <span class="version truncate">{pkg.installedVersion ?? pkg.stableVersion ?? "—"}</span>
   <span class="kind"><Pill tone={pkg.kind === "formula" ? "formula" : "cask"}>{pkg.kind}</Pill></span>
   <span class="outdated">
@@ -95,10 +107,14 @@
 <style>
   .row {
     display: grid;
-    /* minmax(0, 1fr) on the name column — without it, long names like
-       "claude-code-templates" expand the 1fr beyond its share, pushing the
-       version/type/outdated columns rightward inconsistently across rows. */
-    grid-template-columns: 24px minmax(0, 1fr) 120px 80px 120px;
+    /* Library row columns (6 total):
+         icon (24px) / NAME (1fr) / DESCRIPTION (2fr) / VERSION (120px) /
+         TYPE (80px) / OUTDATED (120px).
+       The 1fr/2fr balance gives the description ~2× the name column's
+       share so AI-generated summaries breathe on wide windows. Both use
+       minmax(0, …) so the rest of the grid stays stable when the desc
+       text would otherwise blow past its share. */
+    grid-template-columns: 24px minmax(0, 1fr) minmax(0, 2fr) 120px 80px 120px;
     align-items: center;
     width: 100%;
     min-height: 36px;
@@ -112,22 +128,34 @@
   }
   .row > * { min-width: 0; overflow: hidden; }
 
-  /* Narrow-window responsive (detail panel open + small window): drop the
-     trailing "Outdated" column (5th). Library row layout has 5 cells:
-     icon / name / version / type / outdated. */
-  @media (max-width: 880px) {
+  /* Narrow-window responsive — drop columns in priority order from
+     widest-but-least-essential first:
+       <= 1100px : drop Outdated (6th) — outdated state still encoded by
+                  the upgrade-chevron rendered inside the name cell's
+                  trailing slot in a future tweak; for now just hidden.
+       <=  900px : also drop Description (3rd) — name + version + type
+                  + outdated indicator stay visible.
+       <=  720px : also drop Version (4th). Tightest layout. */
+  @media (max-width: 1100px) {
+    .row {
+      grid-template-columns: 24px minmax(0, 1fr) minmax(0, 2fr) 120px 80px;
+    }
+    .row > :nth-child(6) { display: none; }
+  }
+  @media (max-width: 900px) {
     .row {
       grid-template-columns: 24px minmax(0, 1fr) 120px 80px;
     }
-    .row > :nth-child(5) { display: none; }
+    .row > :nth-child(3),
+    .row > :nth-child(6) { display: none; }
   }
-  /* Tightest: also drop Version (3rd col). Leave icon / NAME / TYPE. */
   @media (max-width: 720px) {
     .row {
       grid-template-columns: 24px minmax(0, 1fr) 80px;
     }
     .row > :nth-child(3),
-    .row > :nth-child(5) { display: none; }
+    .row > :nth-child(4),
+    .row > :nth-child(6) { display: none; }
   }
   .row:hover { background: var(--color-surface-sunken); }
   .row.selected {
@@ -198,6 +226,14 @@
     color: var(--color-text-inverse);
     opacity: 0.75;
   }
+  .desc {
+    font-size: var(--text-body-sm);
+    color: var(--color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row.selected .desc { color: inherit; opacity: 0.85; }
   .version { font-size: var(--text-body-sm); color: var(--color-text-secondary); }
   .upgrade {
     display: inline-flex;

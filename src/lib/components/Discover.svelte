@@ -47,15 +47,19 @@
     return enrichment.friendlyName(token);
   }
 
-  /** Subtitle for a Discover row. Preference order:
-   *    1. AI-enriched friendly name (when AI Features is on + token has
-   *       an enrichment entry)
-   *    2. Upstream Homebrew `desc` (when the catalog summary map has it)
-   *    3. null (token line only)
+  /** Description-column content for a Discover row. Preference order:
+   *    1. AI-generated summary (1-2 sentence "what + when", Tier A
+   *       enrichment) when AI Features is on AND token is in the bundle
+   *    2. Upstream Homebrew `desc` (from the catalog summary maps —
+   *       `catalog_formulae_summary` / `catalog_casks_summary`)
+   *    3. null (empty desc cell)
+   *
+   *  The friendly-subtitle below the token stays as a separate, shorter
+   *  scan-aid handled by `friendlyOf` above — different concept.
    *
    *  Sync — both lookups read pre-loaded in-memory state. */
-  function subtitleOf(token: string, kind: PackageKind): string | null {
-    return friendlyOf(token) ?? catalog.descOf(token, kind);
+  function descOf(token: string, kind: PackageKind): string | null {
+    return enrichment.summaryOf(token) ?? catalog.descOf(token, kind);
   }
 
   async function refreshFromBanner() {
@@ -256,8 +260,9 @@
                   <span class="friendly-subtitle">{friendlyOf(h.name)}</span>
                 {/if}
               </span>
+              <span class="desc truncate text-muted">{enrichment.summaryOf(h.name) ?? h.description ?? ""}</span>
+              <span class="version truncate text-muted">{catalog.versionOf(h.name, h.kind) ?? ""}</span>
               <span class="kind"><Pill tone={h.kind === "formula" ? "formula" : "cask"}>{h.kind}</Pill></span>
-              <span class="desc truncate text-muted">{h.description ?? ""}</span>
               <span class="installed">
                 {#if installed}<Pill tone="success">installed</Pill>{/if}
               </span>
@@ -283,17 +288,19 @@
             {@const isSelected = ui.selectedPackage?.name === h.name && ui.selectedPackage?.kind === h.kind}
             <li>
               <button
-                class="row row--no-desc"
+                class="row row--with-desc"
                 class:selected={isSelected}
                 aria-current={isSelected ? "true" : undefined}
                 onclick={() => openHit(h)}
               >
                 <span class="name truncate">
                   <span class="name-text">{h.name}</span>
-                  {#if subtitleOf(h.name, h.kind)}
-                    <span class="friendly-subtitle">{subtitleOf(h.name, h.kind)}</span>
+                  {#if friendlyOf(h.name)}
+                    <span class="friendly-subtitle">{friendlyOf(h.name)}</span>
                   {/if}
                 </span>
+                <span class="desc truncate text-muted">{descOf(h.name, h.kind) ?? ""}</span>
+                <span class="version truncate text-muted">{catalog.versionOf(h.name, h.kind) ?? ""}</span>
                 <span class="kind"><Pill tone={h.kind === "formula" ? "formula" : "cask"}>{h.kind}</Pill></span>
                 <span class="installed">
                   {#if installed}<Pill tone="success">installed</Pill>{/if}
@@ -499,8 +506,11 @@
           across the fr columns — which shifts the kind cell horizontally between
           installed-vs-not rows. Fixed width keeps every row's kind cell at the
           same x-position. */
-  .row--with-desc { grid-template-columns: minmax(0, 1fr) 80px minmax(0, 2fr) 90px; }
-  .row--no-desc   { grid-template-columns: minmax(0, 1fr) 80px 90px; }
+  /* Canonical 5-column Discover row: NAME | DESC | VERSION | TYPE | TRAIL.
+     Same column order as Library (icon + … + version + type + outdated)
+     for cross-pane consistency. Versions tend to be short (e.g. "1.25.0",
+     "2026.01.07"), so 100px is comfortable. */
+  .row--with-desc { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) 100px 80px 90px; }
   .row:hover { background: var(--color-surface-sunken); }
   .row.selected {
     background: var(--color-selection-strong);
@@ -539,6 +549,11 @@
     margin-top: 1px;
   }
   .desc { font-size: var(--text-body-sm); }
+  .version {
+    font-size: var(--text-body-sm);
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-secondary);
+  }
   .installed { justify-self: end; min-width: 0; }
 
   /* ── Phase 9: category tile grid ─────────────────────────── */

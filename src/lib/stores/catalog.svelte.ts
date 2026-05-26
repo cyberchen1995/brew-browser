@@ -59,6 +59,13 @@ class CatalogStore {
    */
   private descByFormula: Map<string, string> | null = null;
   private descByCask: Map<string, string> | null = null;
+  /** Per-token stable version maps. Same population path as the desc
+   *  maps — populated by `ensureSummariesLoaded()`. Powers list views'
+   *  Version column for uninstalled packages (installed packages get
+   *  their version from `packages.findInstalled(...).installedVersion`
+   *  instead). */
+  private versionByFormula: Map<string, string> | null = null;
+  private versionByCask: Map<string, string> | null = null;
   private summariesLoadPromise: Promise<void> | null = null;
 
   /** Lazy-load the catalog summary on first access. Safe to call from
@@ -137,19 +144,27 @@ class CatalogStore {
           catalogCasksSummary(),
         ]);
         const fm = new Map<string, string>();
+        const fv = new Map<string, string>();
         for (const e of formulae) {
           if (e.desc) fm.set(e.name, e.desc);
+          if (e.version) fv.set(e.name, e.version);
         }
         const cm = new Map<string, string>();
+        const cv = new Map<string, string>();
         for (const e of casks) {
           if (e.desc) cm.set(e.name, e.desc);
+          if (e.version) cv.set(e.name, e.version);
         }
         this.descByFormula = fm;
         this.descByCask = cm;
+        this.versionByFormula = fv;
+        this.versionByCask = cv;
       } catch {
         // Best-effort; subtitle fallback just stays null on failure.
         this.descByFormula = new Map();
         this.descByCask = new Map();
+        this.versionByFormula = new Map();
+        this.versionByCask = new Map();
       } finally {
         this.summariesLoadPromise = null;
       }
@@ -169,6 +184,21 @@ class CatalogStore {
    */
   descOf(name: string, kind: PackageKind): string | null {
     const map = kind === "formula" ? this.descByFormula : this.descByCask;
+    return map?.get(name) ?? null;
+  }
+
+  /**
+   * Sync per-token stable-version lookup. Returns the upstream stable
+   * version when known, null otherwise (or when the summary maps
+   * haven't loaded yet — caller should `ensureSummariesLoaded()` first).
+   *
+   * Use for Discover / Trending Version columns to show "what brew
+   * would install if you ran `brew install <name>` right now". Library
+   * shows `Package.installedVersion` directly (the user's actually-on-
+   * disk version) — different concept, same column slot.
+   */
+  versionOf(name: string, kind: PackageKind): string | null {
+    const map = kind === "formula" ? this.versionByFormula : this.versionByCask;
     return map?.get(name) ?? null;
   }
 

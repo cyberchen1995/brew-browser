@@ -66,6 +66,17 @@ class EnrichmentStore {
     return e.friendlyName ?? null;
   }
 
+  /** Summary short-circuit: returns the AI-generated 1-2 sentence
+   *  "what + when" description when AI Features is on AND the bundle
+   *  has an entry; else null. Used by list-view Description columns
+   *  with `summary > upstream desc > null` fallback semantics.
+   */
+  summaryOf(token: string): string | null {
+    const e = this.lookup(token);
+    if (!e) return null;
+    return e.summary ?? null;
+  }
+
   /** True when the AI Features toggle is on AND we have data loaded.
    *  Components use this to short-circuit render branches without
    *  re-deriving the gate. */

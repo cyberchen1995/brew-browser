@@ -12,6 +12,7 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { packages } from "$lib/stores/packages.svelte";
   import { enrichment } from "$lib/stores/enrichment.svelte";
+  import { catalog } from "$lib/stores/catalog.svelte";
   import type { TrendingEntry, TrendingWindow } from "$lib/types";
 
   onMount(() => {
@@ -19,6 +20,9 @@
     // Prime the enrichment store so AI-enriched friendly names start
     // resolving as soon as data lands.
     enrichment.ensureLoaded();
+    // Description + version columns read from the catalog's per-token
+    // maps — prime them so the columns light up as soon as data lands.
+    void catalog.ensureSummariesLoaded();
   });
 
   /** AI-enriched friendly name for a token, or null. Inline call from
@@ -112,6 +116,8 @@
       <div class="list-header" role="row">
         <SortableHeader label="#" sortKey="rank" active={sortKey === "rank"} dir={sortDir} onSort={changeSort} />
         <SortableHeader label="Name" sortKey="name" active={sortKey === "name"} dir={sortDir} onSort={changeSort} />
+        <span class="header-desc">Description</span>
+        <span class="header-version">Version</span>
         <SortableHeader label="Type" sortKey="kind" active={sortKey === "kind"} dir={sortDir} onSort={changeSort} />
         <SortableHeader label="Installs" sortKey="installs" active={sortKey === "installs"} dir={sortDir} onSort={changeSort} align="right" />
         <span></span>
@@ -134,6 +140,8 @@
                   <span class="friendly-subtitle">{friendlyOf(e.name)}</span>
                 {/if}
               </span>
+              <span class="desc truncate text-muted">{enrichment.summaryOf(e.name) ?? catalog.descOf(e.name, e.kind) ?? ""}</span>
+              <span class="version truncate text-muted">{catalog.versionOf(e.name, e.kind) ?? ""}</span>
               <span class="kind"><Pill tone={e.kind === "formula" ? "formula" : "cask"}>{e.kind}</Pill></span>
               <span class="count mono">{e.installCountFormatted}</span>
               <span class="trail">
@@ -167,26 +175,41 @@
     .refresh-wrap { display: none; }
   }
 
-  /* Narrower still (detail panel open + small window): drop the trailing
-     "installed pill" column entirely. Each list-header/row uses 5 columns;
-     the LAST `:nth-child(5)` is the installed-pill trail. */
-  @media (max-width: 880px) {
+  /* Trending row has 7 cells (# / NAME / DESC / VERSION / TYPE /
+     COUNT / TRAIL). Drop columns in priority order from widest-but-
+     least-essential first:
+       <= 1100px: drop Trail (7th, installed pill)
+       <=  900px: also drop Description (3rd)
+       <=  720px: also drop Version (4th); leave # / NAME / TYPE / COUNT. */
+  @media (max-width: 1100px) {
+    .list-header,
+    .row {
+      grid-template-columns: 48px minmax(0, 1fr) minmax(0, 2fr) 100px 80px 120px;
+    }
+    .list-header > :nth-child(7),
+    .row > :nth-child(7) { display: none; }
+  }
+  @media (max-width: 900px) {
+    .list-header,
+    .row {
+      grid-template-columns: 48px minmax(0, 1fr) 100px 80px 120px;
+    }
+    .list-header > :nth-child(3),
+    .list-header > :nth-child(7),
+    .row > :nth-child(3),
+    .row > :nth-child(7) { display: none; }
+  }
+  @media (max-width: 720px) {
     .list-header,
     .row {
       grid-template-columns: 48px minmax(0, 1fr) 80px 120px;
     }
-    .list-header > :nth-child(5),
-    .row > :nth-child(5) { display: none; }
-  }
-
-  /* Tightest: also drop Installs (4th col). Leave # / NAME / TYPE only. */
-  @media (max-width: 720px) {
-    .list-header,
-    .row {
-      grid-template-columns: 48px minmax(0, 1fr) 80px;
-    }
+    .list-header > :nth-child(3),
     .list-header > :nth-child(4),
-    .row > :nth-child(4) { display: none; }
+    .list-header > :nth-child(7),
+    .row > :nth-child(3),
+    .row > :nth-child(4),
+    .row > :nth-child(7) { display: none; }
   }
 
   /* Sidebar theme-group pattern: sunken background, no border,
@@ -214,7 +237,7 @@
   .list-wrap { flex: 1; overflow-y: auto; min-height: 0; }
   .list-header {
     display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) 80px 120px 100px;
+    grid-template-columns: 48px minmax(0, 1fr) minmax(0, 2fr) 100px 80px 120px 100px;
     gap: var(--space-3);
     padding: var(--space-2) var(--space-3);
     background: var(--color-surface);
@@ -232,7 +255,7 @@
   .list { display: flex; flex-direction: column; }
   .row {
     display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) 80px 120px 100px;
+    grid-template-columns: 48px minmax(0, 1fr) minmax(0, 2fr) 100px 80px 120px 100px;
     align-items: center;
     gap: var(--space-3);
     width: 100%;
@@ -250,9 +273,34 @@
   }
   .row.selected .rank,
   .row.selected .count { color: inherit; }
+  .row.selected .desc,
+  .row.selected .version { color: inherit; opacity: 0.85; }
   .row.selected .friendly-subtitle {
     color: var(--color-text-inverse);
     opacity: 0.75;
+  }
+  .desc {
+    font-size: var(--text-body-sm);
+    color: var(--color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .version {
+    font-size: var(--text-body-sm);
+    color: var(--color-text-secondary);
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .header-desc,
+  .header-version {
+    font-size: var(--text-body-sm);
+    font-weight: var(--fw-medium);
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
   }
   .rank { color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
   /* Vertical flex container so the optional AI-enriched friendly_name
