@@ -7,83 +7,59 @@ Read this first, then `activeContext.md`, then the latest entries in `progress.m
 
 ---
 
-## v0.4.0 Steps 1–8 done on branch (2026-05-26)
+## v0.4.0 — PR open, awaiting merge + release cut (2026-05-26)
 
-**Branch:** `feat/v0.4.0-velocity-and-history` (off `main` at `d6d28a0`). **Only Step 9 — Caddy deploy + verification on `brew-browser.zerologic.com` — remains** before the branch PRs into `main` and v0.4.0 ships. **Workflow rule from this branch onward: merges to `main` go through PRs, no direct pushes.**
+**Branch:** `feat/v0.4.0-velocity-and-history`. **All 9 steps done. PR is open against `main`.** Deploy live on `brew-browser.zerologic.com`. Cron runs first nightly snapshot Wed 03:00. **Workflow rule (durable): merges to main go through PRs, no direct pushes.**
 
-### What's already on the branch
+### What's on the branch (committed + pushed)
 
-- **Step 1–3** (backend, commit `3f576b8`): `Settings.enhanced_trending_enabled`, `require_enhanced_trending` gate, `FeatureDisabled` error variant, parallel `install` + `install-on-request` fetch, server-side velocity from 3-window join, history module (`trending_history_index` + `trending_history_fetch` IPCs), per-package LRU cache, path-traversal-safe URL builder. +33 backend tests (473 → 506).
-- **Step 4–6** (frontend, commit `6711133`): `SettingsSectionTrendingHistory.svelte`, 6th `pathStatuses` entry, Trending tab restructure (velocity column + default sort + inline sparklines + 8-col responsive grid), `TrendingSparkline.svelte` shared SVG with inline/detail variants, `trendingHistory.svelte.ts` store, PackageDetail `trend-card` section. `npm run check` clean.
-- **Step 7** (collector, commit `6901b64`): `tools/trending-collector/` plain Node 20+ ESM with `better-sqlite3`. `seed.js` derives 3 historical buckets per package via rolling-window subtraction; `collect.js` is the nightly cron entrypoint; render produces `index.json` + per-package files. README has the full deploy walkthrough.
-- **Step 8** (docs, this commit): projectbrief nine → ten paths, decisions.md ADR, security.md §16 endpoint audit with verbatim Caddyfile + threat-model table + pre-launch checklist, techContext.md / backendApi.md §13.14 / frontendComponents.md updates, docs/release-notes/0.4.0.md, README disclosure update.
+- **Step 1–3** (backend, commit `3f576b8`): `Settings.enhanced_trending_enabled`, `require_enhanced_trending` gate, `FeatureDisabled` error variant, parallel `install` + `install-on-request` fetch, server-side velocity from 3-window join, history module (`trending_history_index` + `trending_history_fetch` IPCs), per-package LRU cache, path-traversal-safe URL builder.
+- **Step 4–6** (frontend, commit `6711133`): `SettingsSectionTrendingHistory.svelte`, 6th `pathStatuses` entry, Trending tab restructure (velocity column + default sort + inline sparklines + 8-col responsive grid), `TrendingSparkline.svelte` shared SVG, `trendingHistory.svelte.ts` store, PackageDetail `trend-card` section.
+- **Step 7** (collector, commit `6901b64`): `tools/trending-collector/` plain Node 20+ ESM with `better-sqlite3`.
+- **Step 8** (docs, commit `e2598ef`): projectbrief nine → ten paths, decisions.md ADR, security.md §16 endpoint audit, techContext / backendApi §13.14 / frontendComponents updates, docs/release-notes/0.4.0.md, README disclosure.
+- **Deploy-day fixes** (commits `bc7c176`, `cfb6115`, `84ad9ae`, `1ef98dc`): velocity formula bias fix (compare vs prior 11 months, not whole year), cask URL needs `homebrew-cask` segment + `cask:` field normalization, `Sites/` capitalization, Caddy log-filter syntax (`format filter { wrap json; fields { ... delete } }`).
+
+Tests: **507 passing** (was 473 at v0.3.1). `npm run check` clean. `cargo build` clean.
+
+### Production verification (already done, captured for audit trail)
+
+- `https://brew-browser.zerologic.com/trending-history/index.json` → 200, expected headers, no Set-Cookie, no Server header
+- `POST` → 405, `nonexistent.json` → 404
+- `sudo grep -cE 'remote_ip|client_ip|X-Forwarded-For|X-Real-Ip' /var/log/caddy/brew-browser.log` → 0 (the auditable privacy artifact)
+- Cron live (`0 3 * * *`), dry-run completed in 43s, pulled 101 new rows beyond seed
+- Real leaderboard top: `hermes-agent` (v=1372), `raullenchai/rapid-mlx` (v=159), `grafana/gcx` (v=140), `openssl@4` (v=129) — genuine adoption signal
 
 ### What to do on next-session pickup
 
-**Read `tasks/2026-05/19-v0.4.0-backend.md` first** (record now spans Steps 1–8 — full file:line detail, every decision, every test).
-
-Then **execute Step 9** on `brew-browser.zerologic.com`:
-
-1. **Deploy collector code** to the box:
+1. **Check PR status.** `gh pr list` for the open PR against main. Address any review feedback.
+2. **Merge.** Squash or merge-commit — both fine.
+3. **Cut v0.4.0 release** (same flow as v0.3.1):
    ```sh
-   rsync -av --delete \
-     --exclude=node_modules --exclude=state --exclude=out \
-     tools/trending-collector/ \
-     brew-browser.zerologic.com:/home/michael/Sites/brew-trending-collector/
-   ssh brew-browser.zerologic.com \
-     'cd /home/michael/Sites/brew-trending-collector && npm ci --omit=dev'
+   # Version bump first — Cargo.toml + Cargo.lock + tauri.conf.json + landing/index.html
+   tools/build/sign-and-notarize.sh
+   tools/release/publish-manifest.sh 0.4.0
+   gh release create v0.4.0 \
+     --title "v0.4.0 — Trending Velocity + Opt-in History Endpoint" \
+     --notes-file docs/release-notes/0.4.0.md \
+     bundle/macos/brew-browser_0.4.0_aarch64.dmg \
+     bundle/macos/brew-browser.app.tar.gz \
+     bundle/macos/brew-browser.app.tar.gz.sig
+   # rename the asset to versioned name (gh release create #newname only sets label):
+   ASSET_ID=$(gh api repos/msitarzewski/brew-browser/releases/tags/v0.4.0 --jq '.assets[] | select(.name=="brew-browser.app.tar.gz") | .id')
+   gh api -X PATCH /repos/msitarzewski/brew-browser/releases/assets/$ASSET_ID -f name=brew-browser_0.4.0_aarch64.app.tar.gz
+   # rsync manifest:
+   rsync -av updater.json umacbookpro:Sites/brew-browser/updater.json
    ```
+4. **Verify auto-update path** from a v0.3.1 install: Settings → Network → Updates → "Check for updates now" should surface v0.4.0; Install should succeed with `Cache-Control: public, max-age=...` on the manifest fetch.
 
-2. **Bootstrap the DB** (one-shot — `seed.js` refuses to run twice):
-   ```sh
-   ssh brew-browser.zerologic.com \
-     'cd /home/michael/Sites/brew-trending-collector && \
-      DB_PATH=/home/michael/data/brew-trending/db.sqlite \
-      OUT_DIR=/home/michael/Sites/brew-trending \
-      node seed.js'
-   ```
+Tauri release-pipeline gotchas reference (six things that bit during v0.3.0/v0.3.1): `~/.claude/projects/-Users-michael-Clean/memory/tauri_release_pipeline_gotchas.md`.
 
-3. **Run an initial collect** so the JSON tree exists immediately (cron is nightly; day-0 needs a manual kick):
-   ```sh
-   ssh brew-browser.zerologic.com \
-     'cd /home/michael/Sites/brew-trending-collector && \
-      DB_PATH=/home/michael/data/brew-trending/db.sqlite \
-      OUT_DIR=/home/michael/Sites/brew-trending \
-      node collect.js'
-   ```
+### v0.3.x polish queue (still valid — batch into v0.4.1 if there's enough)
 
-4. **Add the cron line** (`crontab -e` on the box):
-   ```
-   0 3 * * * cd /home/michael/Sites/brew-trending-collector && DB_PATH=/home/michael/data/brew-trending/db.sqlite OUT_DIR=/home/michael/Sites/brew-trending /usr/bin/node collect.js >> /var/log/brew-trending-collector.log 2>&1
-   ```
-   Adjust `/usr/bin/node` per `which node`.
-
-5. **Add the Caddy block** — verbatim config in `memory-bank/security.md` §16.2. Critical bits: `request>remote_ip "0.0.0.0"` in `log.format.fields` (the load-bearing privacy claim), `respond @writes 405` for GET-only enforcement, `-Set-Cookie` header strip, `Cache-Control "public, max-age=21600"`. Then `caddy reload`.
-
-6. **Run the pre-launch curl checklist** from `security.md` §16.6 — paste the results into the PR description for the audit trail.
-
-7. **PR into `main`** — `gh pr create` from the branch. Don't push to main directly.
-
-8. **Cut v0.4.0 release** following the same flow as v0.3.1 (`tools/release/sign-and-notarize.sh` → `tools/release/publish-manifest.sh 0.4.0` → `gh release create` → `gh api PATCH` for asset rename → manifest rsync to the box). Tauri release-pipeline gotchas in `~/.claude/projects/-Users-michael-Clean/memory/tauri_release_pipeline_gotchas.md`.
-
-### v0.3.x polish queue (still valid — fold into v0.4.0 finishing pass or batch as v0.4.1)
-
-(Same list as before — these don't depend on v0.4.0 backend, can be picked up whenever.)
+These don't depend on v0.4.0 work; pick up whenever.
 
 - **Donut hover center-text overflow** on long category labels.
-- **Stale "Paranoid mode is on" toast** wording — one-line fix in `src/lib/types.ts` (now done? check — I changed it to "Offline Mode" in Step 4's `brewErrorMessage` update).
-- **localStorage flag gating eager `loadStatus()`** in TitlebarControls.
-- **`cancelSignin` timer leak** — rare edge case.
-- **Startup placeholder-pubkey guard** — 5-line panic-on-PLACEHOLDER in release builds.
-- **Persist `last_checked_at` to disk** — auto-updater 24h floor across launches.
-- **Activity → data-dir migration** — bigger persistence cleanup.
-
-### v0.3.x polish queue (still valid — batch into v0.3.2 or fold into v0.4.0 finishing pass)
-
-(Same list as before — these don't depend on v0.4.0 backend, can be picked up whenever.)
-
-- **Donut hover center-text overflow** on long category labels.
-- **Stale "Paranoid mode is on" toast** wording — one-line fix in `src/lib/types.ts`.
+- **Stale "Paranoid mode is on" toast** — fixed in v0.4.0 Step 4 (`brewErrorMessage` now reads "Offline Mode is on — …"). Can remove from this queue.
 - **localStorage flag gating eager `loadStatus()`** in TitlebarControls.
 - **`cancelSignin` timer leak** — rare edge case.
 - **Startup placeholder-pubkey guard** — 5-line panic-on-PLACEHOLDER in release builds.

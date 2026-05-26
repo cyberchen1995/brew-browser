@@ -727,3 +727,32 @@ Same day, second commit + third commit on top of the backend. Full detail in `ta
 ### What's left
 
 **Step 9 — Caddy deploy** on `brew-browser.zerologic.com`. Verbatim config in `security.md` §16.2; verification curl checklist in §16.6. Then bootstrap run (`node seed.js` on the box) → PR into main → v0.4.0 release.
+
+## 2026-05-26 (Step 9 deployed, v0.4.0 PR'd)
+
+Same day, three Caddyfile syntax iterations + three deploy-day bug fixes surfaced and resolved. Full file:line detail in `tasks/2026-05/19-v0.4.0-backend.md` (now spans Steps 1–9 with the verification narrative).
+
+### Done (Step 9 — deploy verification)
+
+- ✅ Collector deployed to `/home/michael/Sites/brew-trending-collector/`. `npm install --omit=dev` succeeded; `better-sqlite3` prebuilt binary loaded in ~3s.
+- ✅ DB bootstrapped — `seed.js` inserted **383,581 rows** across 4 categories × 3 windows × 3 historical buckets + today's daily snapshot.
+- ✅ Initial collect rendered 500 index entries + 18,028 per-package files in ~33s.
+- ✅ Caddyfile updated: `handle_path /trending-history/*` handler + site-wide IP-redacted `log` block (`format filter { wrap json; fields { ... delete } }` worked on the third syntax attempt — earlier versions tried `format json { fields { ... } }` and then `log` nested inside `handle_path`, both wrong; pinned in `security.md` §16.2 with iteration history).
+- ✅ Caddy reload wedged on log-file permission denied — fixed with `sudo chown caddy:caddy` + `sudo systemctl restart caddy` (reset-failed didn't unwedge the reload-notify job; restart bypassed it).
+- ✅ Cron installed: `0 3 * * *`. Dry-run took 43s, pulled in 101 new rows beyond the seed.
+- ✅ Pre-launch checklist from `security.md` §16.6: every curl returns expected (200 on index, 405 on POST, 200 on per-package, 404 on nonexistent). **`grep -cE 'remote_ip|client_ip|X-Forwarded-For|X-Real-Ip' /var/log/caddy/brew-browser.log` returns 0** — the auditable privacy artifact.
+- ✅ Real leaderboard top after the velocity-formula fix: `hermes-agent` (v=1372), `raullenchai/rapid-mlx` (v=159), `grafana/gcx` (v=140), `openssl@4` (v=129) — genuine adoption signal.
+
+### Deploy-day bug fixes that landed on the branch
+
+1. **Velocity formula bias toward brand-new packages.** Old formula compared recent month vs whole-year average (recent month double-counted as baseline), so brand-new packages with c30 == c365 always returned the maximum 12.17 ratio. New formula compares recent month vs **prior 11 months** (c365 - c30). Updated in both Rust and JS byte-for-byte. +1 test pinning brand-new-package-returns-None. Tests 506 → 507.
+2. **Cask URL needed `homebrew-cask` repo segment.** Plus cask items use `cask:` instead of `formula:` field — extractItems now normalizes both shapes.
+3. **Path normalization `Sites/` vs `sites/`.** Server convention is capitalized (Mac convention preserved on the Ubuntu box). Sed-replaced across collector + memory-bank docs.
+
+### Workflow learning
+
+Caddy 2.x's log-filter syntax bit us three times. The deployed-as-is block is now pinned in `security.md` §16.2 with iteration history called out inline so a future reader doesn't accidentally revive an earlier broken draft from git history.
+
+### Status
+
+**Step 9 complete.** PR open against `main`. After merge: cut the v0.4.0 release via the standard pipeline (`sign-and-notarize.sh` → `publish-manifest.sh 0.4.0` → `gh release create` → `gh api PATCH` for asset rename → manifest rsync). Tauri-release gotchas reference: `~/.claude/projects/-Users-michael-Clean/memory/tauri_release_pipeline_gotchas.md`.
