@@ -710,7 +710,8 @@ brew-browser.zerologic.com {
                 roll_size 10MiB
                 roll_keep 5
             }
-            format json {
+            format filter {
+                wrap json
                 fields {
                     request>remote_ip delete
                     request>remote_port delete
