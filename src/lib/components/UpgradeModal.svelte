@@ -37,6 +37,7 @@
   import { packages } from "$lib/stores/packages.svelte";
   import { toast } from "$lib/stores/toast.svelte";
   import { ui } from "$lib/stores/ui.svelte";
+  import { vulnerabilities } from "$lib/stores/vulnerabilities.svelte";
   import { brewUpgradeMany } from "$lib/api";
   import type { Package } from "$lib/types";
   import { reportableToastError } from "$lib/util/reportIssue";
@@ -144,6 +145,15 @@
             : `Upgraded ${names.length} packages`,
         );
         await packages.load(true);
+        // v0.5.0 — upgrading many packages = bulk version changes. Easiest
+        // is a full re-scan; scanIfNeeded fingerprints to skip when nothing
+        // actually changed (e.g. brew_upgrade was a no-op). After the scan
+        // completes, surface the once-per-session exposure heads-up so the
+        // user sees the post-upgrade security context.
+        vulnerabilities
+          .scanIfNeeded()
+          .then(() => vulnerabilities.maybeNotifyExposure())
+          .catch(() => {});
       } else {
         toast.error("Upgrade finished with errors", "See the Activity drawer.");
       }

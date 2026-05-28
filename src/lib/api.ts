@@ -41,6 +41,7 @@ import type {
   PackageDetail,
   PackageKind,
   PackageList,
+  RawVuln,
   RepoStats,
   SearchResults,
   Service,
@@ -50,6 +51,7 @@ import type {
   TrendingReport,
   TrendingWindow,
   UpdateCheckOutcome,
+  VulnScanReport,
 } from "./types";
 
 // ============================================================
@@ -726,6 +728,66 @@ export function updateSkip(version: string): Promise<void> {
  */
 export function updateRelaunch(): Promise<void> {
   return invoke<void>("update_relaunch");
+}
+
+// ============================================================
+// v0.5.0 — opt-in vulnerability scanning (brew vulns)
+// ============================================================
+
+/**
+ * Full-install-set vulnerability scan. Gated end-to-end by
+ * `vulnerabilityScanningEnabled` AND `paranoidMode === false` on the
+ * backend.
+ *
+ * `force=true` bypasses the install-set-fingerprint skip predicate
+ * (the Security tab's Refresh button uses this). When `false`, a
+ * matching fingerprint serves the previous report from disk without
+ * re-shelling — `report.source === "cache"` flags that path.
+ *
+ * Throws `feature_disabled` when the toggle is off,
+ * `paranoid_mode_blocked` when Offline Mode is on, and
+ * `vulns_not_installed` when the `brew vulns` subcommand hasn't been
+ * installed yet (the UI shows the install affordance in that case).
+ */
+export function vulnsScanAll(force: boolean): Promise<VulnScanReport> {
+  return invoke<VulnScanReport>("vulns_scan_all", { force });
+}
+
+/**
+ * Scan a single formula by name. Used by the PackageDetail
+ * "Check vulnerabilities" affordance. Gated identically to the full
+ * scan. Caches the result on the backend when the installed version
+ * is resolvable from `installed_cache`.
+ */
+export function vulnsScanOne(name: string): Promise<RawVuln[]> {
+  return invoke<RawVuln[]>("vulns_scan_one", { name });
+}
+
+/**
+ * One-click installer for the `brew vulns` subcommand. Runs
+ * `brew install homebrew/brew-vulns/brew-vulns`. Returns the captured
+ * stdout for Activity-drawer surfacing.
+ *
+ * **Gating note:** consults the master Offline Mode gate only — the
+ * per-feature toggle is bypassed so users can install the helper
+ * *before* flipping the toggle on (chicken-and-egg otherwise).
+ */
+export function vulnsInstallHelper(): Promise<string> {
+  return invoke<string>("vulns_install_helper");
+}
+
+/**
+ * Drop a single cache entry. Called by post-upgrade / post-uninstall
+ * hooks so a CVE record for a version the user no longer has can't
+ * outlive the version it referenced. Ungated — local cleanup is
+ * always safe.
+ */
+export function vulnsInvalidate(
+  kind: PackageKind,
+  name: string,
+  version: string,
+): Promise<void> {
+  return invoke<void>("vulns_invalidate", { kind, name, version });
 }
 
 // ============================================================

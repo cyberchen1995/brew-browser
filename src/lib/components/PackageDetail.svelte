@@ -39,6 +39,10 @@
   import { settings } from "$lib/stores/settings.svelte";
   import { env } from "$lib/stores/env.svelte";
   import { github, type RepoStatsOutcome, type StarredOutcome } from "$lib/stores/github.svelte";
+  import { vulnerabilities } from "$lib/stores/vulnerabilities.svelte";
+  import ShieldCheck from "@lucide/svelte/icons/shield-check";
+  import ShieldAlert from "@lucide/svelte/icons/shield-alert";
+  import Shield from "@lucide/svelte/icons/shield";
   import { brewInfo, brewInstall, brewUninstall, brewUpgrade, appVersion } from "$lib/api";
   import { safeOpenUrl } from "$lib/util/url";
   import { reportableToastError } from "$lib/util/reportIssue";
@@ -46,7 +50,7 @@
   import IssueModal from "./IssueModal.svelte";
   import TrendingSparkline from "./TrendingSparkline.svelte";
   import { trendingHistory } from "$lib/stores/trendingHistory.svelte";
-  import { brewErrorMessage, isBrewError, normalizeServiceStatus, type EnrichmentEntry, type IconSource, type PackageDetail } from "$lib/types";
+  import { brewErrorMessage, isBrewError, normalizeServiceStatus, type EnrichmentEntry, type IconSource, type PackageDetail, type RawVuln, type Severity } from "$lib/types";
 
   // Categories file is small; ensure it's loaded so the pills can render. Idempotent.
   categories.ensureLoaded();
@@ -149,6 +153,18 @@
         toast.success(`Installed ${name}`);
         packages.load(true);
         if (ui.selectedPackage) loadDetail(ui.selectedPackage.name, ui.selectedPackage.kind);
+        // v0.5.0 — newly installed package has no scan record. Kick a
+        // single-package scan so the Security card populates without
+        // waiting for the next full Refresh. After the scan completes,
+        // surface a one-time-per-session heads-up if the user has
+        // known vulnerabilities ELSEWHERE in their install — the
+        // "install a thing → notice you have N existing CVEs" moment.
+        if (settings.effective.vulnerabilityScanningEnabled) {
+          vulnerabilities
+            .scanOne(kind, name)
+            .then(() => vulnerabilities.maybeNotifyExposure())
+            .catch(() => {});
+        }
       } else {
         toast.error(`Install failed: ${name}`);
       }
@@ -174,7 +190,14 @@
       });
       if (result.success) {
         toast.success(`Uninstalled ${name}`);
+        // v0.5.0 — drop the vuln cache entry for the version we just removed.
+        // Safe even when feature is off (no-op). Capture installedVersion
+        // BEFORE closeDetail/packages.load wipes our `pkg` derived.
+        const removedVersion = pkg?.installedVersion ?? null;
         packages.load(true);
+        if (removedVersion) {
+          vulnerabilities.invalidate(kind, name, removedVersion).catch(() => {});
+        }
         ui.closeDetail();
       } else {
         toast.error(`Uninstall failed: ${name}`);
@@ -186,7 +209,7 @@
 
   async function doUpgrade() {
     if (!ui.selectedPackage) return;
-    const { name } = ui.selectedPackage;
+    const { name, kind } = ui.selectedPackage;
     const tmpId = crypto.randomUUID();
     activity.startJob(`Upgrading ${name}`, tmpId, `brew upgrade ${name}`);
     ui.openDrawer();
@@ -200,8 +223,22 @@
       });
       if (result.success) {
         toast.success(`Upgraded ${name}`);
+        // v0.5.0 — old version gone, new version installed. Drop the old
+        // vuln entry and re-scan so the Security card reflects the patched
+        // state immediately. Capture oldVersion BEFORE packages.load
+        // refreshes `pkg` with the new installedVersion.
+        const oldVersion = pkg?.installedVersion ?? null;
         packages.load(true);
         if (ui.selectedPackage) loadDetail(ui.selectedPackage.name, ui.selectedPackage.kind);
+        if (oldVersion) {
+          await vulnerabilities.invalidate(kind, name, oldVersion).catch(() => {});
+        }
+        if (settings.effective.vulnerabilityScanningEnabled) {
+          vulnerabilities
+            .scanOne(kind, name)
+            .then(() => vulnerabilities.maybeNotifyExposure())
+            .catch(() => {});
+        }
       } else {
         toast.error(`Upgrade failed: ${name}`);
       }
@@ -645,6 +682,151 @@
     return { owner: m[1], repo: m[2].replace(/\.git$/i, "") };
   }
 
+  // ────────────────────────────────────────────────────────────────
+  // v0.5.0 — Security card
+  //
+  // Three rendering states (all gated by the feature toggle):
+  //   1. No record  → CTA "Check now" (calls vulnerabilities.scanOne)
+  //   2. Record + no vulns → positive "✓ No known vulnerabilities"
+  //   3. Record + vulns    → list of findings + optional "Upgrade to fix"
+  //
+  // Deliberately surfaced AFTER the homepage / before trending and
+  // service cards so it's prominent without elbowing the GitHub stats
+  // (which a far larger fraction of packages have).
+
+  /** Show the card at all? Settings gate only — the inner states branch
+      on whether we have a record. */
+  let securityCardVisible = $derived(
+    settings.effective.vulnerabilityScanningEnabled === true,
+  );
+
+  /** The current package's scan record, or undefined when never scanned. */
+  let securityRecord = $derived(
+    pkg ? vulnerabilities.byPackage(pkg.kind, pkg.name) : undefined,
+  );
+
+  /** True while a scan IPC is in flight (any scan, since the store is
+      single-flight). Used to disable buttons and show a spinner. */
+  let securityLoading = $derived(vulnerabilities.loading);
+
+  /** Severity → tone for the per-vuln pill colour. Mirrors the row dot's
+      mapping (critical+high → danger, medium → warning, low → info,
+      unknown → neutral) so the visual language stays consistent across
+      surfaces. */
+  function severityTone(sev: Severity): "danger" | "warning" | "info" | "neutral" {
+    switch (sev) {
+      case "critical":
+      case "high":   return "danger";
+      case "medium": return "warning";
+      case "low":    return "info";
+      default:       return "neutral";
+    }
+  }
+
+  /** First HTTPS reference for a vuln — used as the click-target for
+      the CVE/GHSA id. When `references` is empty (brew-vulns currently
+      omits the field for OSV-sourced entries; only GHSA enrichment
+      populates it), fall back to the canonical detail page derived
+      from the ID prefix. */
+  function vulnPrimaryLink(v: RawVuln): string | null {
+    for (const ref of v.references) {
+      if (ref.startsWith("https://")) return ref;
+    }
+    return canonicalVulnUrl(v.id);
+  }
+
+  /** Map a vulnerability ID to its canonical detail page so the user
+      always has somewhere to click when the advisory's `references`
+      field is empty (the common case for OSV-sourced entries from
+      `brew vulns` without GHSA enrichment).
+      Returns null for unrecognized ID shapes. */
+  function canonicalVulnUrl(id: string): string | null {
+    if (!id) return null;
+    if (id.startsWith("CVE-")) return `https://nvd.nist.gov/vuln/detail/${id}`;
+    if (id.startsWith("OSV-")) return `https://osv.dev/vulnerability/${id}`;
+    if (id.startsWith("GHSA-")) return `https://github.com/advisories/${id}`;
+    return null;
+  }
+
+  /** Compare two semver-ish version strings. Returns true when `a` is
+      strictly OLDER than `b`. Used to decide whether to show "Upgrade
+      to fix" — if the user is already on the patched version (or newer)
+      we shouldn't nag. Naïve dot-segment compare with numeric coercion
+      — good enough for brew's mostly-semver tags; doesn't handle every
+      pre-release suffix edge case but degrades to "show the button"
+      (false-positive bias). */
+  function versionLessThan(a: string, b: string): boolean {
+    if (!a || !b) return false;
+    const norm = (v: string) => v.replace(/^v/i, "").split(/[.-]/);
+    const aa = norm(a);
+    const bb = norm(b);
+    const len = Math.max(aa.length, bb.length);
+    for (let i = 0; i < len; i++) {
+      const an = parseInt(aa[i] ?? "0", 10);
+      const bn = parseInt(bb[i] ?? "0", 10);
+      if (Number.isNaN(an) || Number.isNaN(bn)) {
+        // String compare for non-numeric segments.
+        const as = aa[i] ?? "";
+        const bs = bb[i] ?? "";
+        if (as < bs) return true;
+        if (as > bs) return false;
+      } else {
+        if (an < bn) return true;
+        if (an > bn) return false;
+      }
+    }
+    return false;
+  }
+
+  /** True when ANY vuln on the record has a `fixedIn` value AND the
+      installed version is older than that fix. Drives the "Upgrade to
+      fix" button. */
+  let securityUpgradeAvailable = $derived.by(() => {
+    if (!securityRecord || securityRecord.vulns.length === 0) return false;
+    if (!pkg?.installedVersion) return false;
+    const installed = pkg.installedVersion;
+    for (const v of securityRecord.vulns) {
+      if (v.fixedIn && versionLessThan(installed, v.fixedIn)) return true;
+    }
+    return false;
+  });
+
+  /** Relative time helper for the scan timestamp. "scanned 2h ago" /
+      "just now" / "scanned 3 days ago". */
+  function relativeScanTime(d: Date | string): string {
+    const t = typeof d === "string" ? Date.parse(d) : d.getTime();
+    if (Number.isNaN(t)) return "";
+    const diffMs = Date.now() - t;
+    const sec = Math.floor(diffMs / 1000);
+    if (sec < 60) return "just now";
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    const day = Math.floor(hr / 24);
+    if (day < 30) return `${day} day${day === 1 ? "" : "s"} ago`;
+    const mo = Math.floor(day / 30);
+    return `${mo} month${mo === 1 ? "" : "s"} ago`;
+  }
+
+  /** Invoke the store's scanOne — used by "Check now" and "Re-check". */
+  async function checkSecurity() {
+    if (!pkg) return;
+    await vulnerabilities.scanOne(pkg.kind, pkg.name);
+  }
+
+  /** Run the actual upgrade — same pipeline the footer Upgrade button
+      uses. Wired up here directly so the user can fix from inside the
+      Security card without scrolling to the footer. */
+  function upgradeForSecurity() {
+    void doUpgrade();
+  }
+
+  /** Open a vuln advisory link via the URL allowlist. */
+  async function openVulnRef(url: string) {
+    await safeOpenUrl(url);
+  }
+
   async function svcAct(action: "start" | "stop" | "restart") {
     if (!pkg) return;
     try {
@@ -806,6 +988,153 @@
             <span class="truncate">{pkg.homepage}</span>
             <ExternalLink size={12} />
           </button>
+        {/if}
+
+        <!-- v0.5.0: Security card. Three states branch off whether we
+             have a scan record for this (kind, name) pair. Settings-
+             gated; the entire section disappears when the user hasn't
+             opted into vulnerability scanning. -->
+        {#if securityCardVisible}
+          <section class="sec-card" aria-label="Security">
+            {#if securityRecord === undefined}
+              <!-- State 1: never scanned this package -->
+              <div class="sec-head">
+                <Shield size={16} class="sec-icon" />
+                <h3>Security</h3>
+              </div>
+              <p class="sec-cta">Check this package for known vulnerabilities.</p>
+              <div class="sec-actions">
+                <button
+                  type="button"
+                  class="sec-btn sec-btn-primary"
+                  disabled={securityLoading}
+                  onclick={checkSecurity}
+                >
+                  {#if securityLoading}
+                    <Loader size={14} class="spin-slow" />
+                    <span>Checking…</span>
+                  {:else}
+                    <Shield size={14} />
+                    <span>Check now</span>
+                  {/if}
+                </button>
+              </div>
+            {:else if securityRecord.vulns.length === 0}
+              <!-- State 2: scanned, clean -->
+              <div class="sec-head sec-head-clean">
+                <ShieldCheck size={16} class="sec-icon-clean" />
+                <h3>Security</h3>
+              </div>
+              <p class="sec-clean">
+                No known vulnerabilities{securityRecord.version
+                  ? ` at version ${securityRecord.version}`
+                  : ""}.
+              </p>
+              <div class="sec-foot">
+                <span class="sec-stamp text-muted">
+                  scanned {relativeScanTime(securityRecord.scannedAt)}
+                </span>
+                <button
+                  type="button"
+                  class="sec-link"
+                  disabled={securityLoading}
+                  onclick={checkSecurity}
+                >
+                  {securityLoading ? "Re-checking…" : "Re-check"}
+                </button>
+              </div>
+            {:else}
+              <!-- State 3: scanned, has findings -->
+              {@const vulns = securityRecord.vulns}
+              <div class="sec-head sec-head-vuln">
+                <ShieldAlert size={16} class="sec-icon-vuln" />
+                <h3>
+                  Security &middot;
+                  {vulns.length} known vulnerabilit{vulns.length === 1 ? "y" : "ies"}
+                </h3>
+              </div>
+
+              {#if securityUpgradeAvailable}
+                <div class="sec-actions">
+                  <button
+                    type="button"
+                    class="sec-btn sec-btn-primary"
+                    onclick={upgradeForSecurity}
+                    title="Run brew upgrade for this package"
+                  >
+                    <ArrowUpCircle size={14} />
+                    <span>Upgrade to fix</span>
+                  </button>
+                </div>
+              {/if}
+
+              <ul class="sec-list">
+                {#each vulns as v (v.id || v.summary)}
+                  {@const tone = severityTone(v.severity)}
+                  {@const link = vulnPrimaryLink(v)}
+                  <li class="sec-item">
+                    <div class="sec-item-head">
+                      <span class="sec-sev sec-sev-{tone}">{v.severity}</span>
+                      {#if v.id}
+                        {#if link}
+                          <button
+                            type="button"
+                            class="sec-id"
+                            onclick={() => openVulnRef(link)}
+                            title={`Open advisory: ${link}`}
+                          >
+                            {v.id}
+                            <ExternalLink size={10} />
+                          </button>
+                        {:else}
+                          <span class="sec-id sec-id-plain">{v.id}</span>
+                        {/if}
+                      {/if}
+                      {#if v.fixedIn}
+                        <span class="sec-fixed" title="Patched version">
+                          Patched in {v.fixedIn}
+                        </span>
+                      {/if}
+                    </div>
+                    {#if v.summary}
+                      <p class="sec-summary">{v.summary}</p>
+                    {:else if link}
+                      <!-- brew-vulns sends `summary: null` for advisories
+                           OSV hasn't summarized (a real case, e.g. some
+                           CVE entries). Keep the row balanced with a
+                           "View details →" affordance pointed at the
+                           canonical detail page, so the user always has
+                           somewhere to click instead of an orphaned ID. -->
+                      <p class="sec-summary sec-summary-empty">
+                        <button
+                          type="button"
+                          class="sec-details-link"
+                          onclick={() => openVulnRef(link)}
+                        >
+                          No summary available — view details
+                          <ExternalLink size={10} />
+                        </button>
+                      </p>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+
+              <div class="sec-foot">
+                <span class="sec-stamp text-muted">
+                  scanned {relativeScanTime(securityRecord.scannedAt)}
+                </span>
+                <button
+                  type="button"
+                  class="sec-link"
+                  disabled={securityLoading}
+                  onclick={checkSecurity}
+                >
+                  {securityLoading ? "Re-checking…" : "Re-check"}
+                </button>
+              </div>
+            {/if}
+          </section>
         {/if}
 
         <!-- v0.4.0: install-trend sparkline. Strictly passive (D4): only
@@ -1616,6 +1945,204 @@
     font-weight: var(--fw-medium);
     line-height: 1;
   }
+
+  /* ── Security card (v0.5.0) ──
+     Three visual states share a card frame. Tone-coloured headers
+     signal posture (neutral/clean/vuln) at a glance; the body width is
+     constrained by the parent .body padding. List items use a clean
+     left-aligned layout with a severity pill, the advisory id, and an
+     optional "Patched in X" badge. */
+  .sec-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-sunken);
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    font-size: var(--text-body-sm);
+  }
+  .sec-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-text-primary);
+  }
+  .sec-head h3 {
+    font-size: var(--text-h3);
+    font-weight: var(--fw-semibold);
+    margin: 0;
+  }
+  .sec-card :global(.sec-icon) { color: var(--color-text-secondary); }
+  .sec-card :global(.sec-icon-clean) { color: var(--color-success-on-subtle, var(--color-success)); }
+  .sec-card :global(.sec-icon-vuln)  { color: var(--color-danger-on-subtle, var(--color-danger)); }
+
+  .sec-cta {
+    margin: 0;
+    color: var(--color-text-secondary);
+    line-height: var(--lh-normal);
+  }
+  .sec-clean {
+    margin: 0;
+    color: var(--color-success-on-subtle, var(--color-success));
+    font-weight: var(--fw-medium);
+  }
+
+  .sec-actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .sec-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px var(--space-2);
+    height: 28px;
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-secondary);
+    font-size: var(--text-body-sm);
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  }
+  .sec-btn:not(:disabled):hover {
+    background: var(--color-surface-raised);
+    color: var(--color-text-primary);
+    border-color: var(--color-accent);
+  }
+  .sec-btn:disabled { opacity: 0.5; cursor: default; }
+  .sec-btn-primary {
+    background: var(--color-brand-subtle, var(--color-surface));
+    border-color: var(--color-brand, var(--color-accent));
+    color: var(--color-text-primary);
+  }
+  .sec-btn-primary:not(:disabled):hover {
+    background: var(--color-brand, var(--color-accent));
+    color: var(--color-text-inverse);
+    border-color: var(--color-brand, var(--color-accent));
+  }
+
+  .sec-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .sec-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+  }
+  .sec-item-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .sec-summary {
+    margin: 0;
+    color: var(--color-text-secondary);
+    line-height: var(--lh-normal);
+    overflow-wrap: anywhere;
+  }
+  .sec-summary-empty { font-style: italic; }
+  .sec-details-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--color-text-link, var(--color-brand));
+    font: inherit;
+    font-style: italic;
+    cursor: pointer;
+  }
+  .sec-details-link:hover { text-decoration: underline; }
+
+  /* Severity pill — mirrors Pill.svelte's tones but inlined here so the
+     pill keeps Pill.svelte's class isolation untouched. Lowercase text
+     to match the rest of the design system. */
+  .sec-sev {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-caption);
+    font-weight: var(--fw-medium);
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .sec-sev-danger  { background: var(--color-danger-subtle);  color: var(--color-danger-on-subtle); }
+  .sec-sev-warning { background: var(--color-warning-subtle); color: var(--color-warning-on-subtle); }
+  .sec-sev-info    { background: var(--color-info-subtle);    color: var(--color-info-on-subtle); }
+  .sec-sev-neutral { background: var(--color-surface-sunken); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
+
+  .sec-id {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    height: 18px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    border: 1px dashed var(--color-border);
+    color: var(--color-text-link, var(--color-brand));
+    font-family: var(--font-mono);
+    font-size: var(--text-mono);
+    line-height: 1;
+    cursor: pointer;
+  }
+  .sec-id:hover { background: var(--color-surface-sunken); text-decoration: underline; }
+  .sec-id-plain {
+    cursor: default;
+    color: var(--color-text-muted);
+  }
+  .sec-id-plain:hover { background: transparent; text-decoration: none; }
+
+  .sec-fixed {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: var(--radius-sm);
+    background: var(--color-success-subtle);
+    color: var(--color-success-on-subtle);
+    font-size: var(--text-caption);
+    font-weight: var(--fw-medium);
+    line-height: 1;
+  }
+
+  .sec-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px dashed var(--color-border);
+  }
+  .sec-stamp { font-size: var(--text-caption); }
+  .sec-link {
+    background: transparent;
+    color: var(--color-text-link, var(--color-brand));
+    font-size: var(--text-caption);
+    padding: 2px var(--space-1);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .sec-link:not(:disabled):hover { background: var(--color-surface); text-decoration: underline; }
+  .sec-link:disabled { opacity: 0.5; cursor: default; }
 
   :global(.spin-slow) {
     animation: spin 1.5s linear infinite;

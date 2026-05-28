@@ -155,6 +155,21 @@ pub enum BrewError {
     /// future plugin behaviour change cannot reopen the hole).
     #[error("update would downgrade {current} to {target}; refusing")]
     DowngradeRejected { current: String, target: String },
+
+    /// v0.5.0 — the user opted in to vulnerability scanning but the
+    /// `brew vulns` subcommand is not installed. Distinct from
+    /// [`Self::BrewNotFound`] (brew itself missing) and
+    /// [`Self::FeatureDisabled`] (toggle off) because the cure is
+    /// different: the frontend should surface a one-click "Install
+    /// brew-vulns" affordance that runs
+    /// `brew install homebrew/brew-vulns/brew-vulns`.
+    ///
+    /// The `install_command` field carries the exact command the
+    /// frontend should display + offer to run, so the wire shape stays
+    /// self-describing if the upstream install incantation ever changes.
+    #[error("brew vulns subcommand not installed (run `{install_command}` to install)")]
+    #[serde(rename_all = "camelCase")]
+    VulnsNotInstalled { install_command: String },
 }
 
 // ---------- From impls ----------
@@ -481,6 +496,23 @@ mod tests {
         assert_eq!(v["code"], "downgrade_rejected");
         assert_eq!(v["current"], "0.3.0");
         assert_eq!(v["target"], "0.2.1");
+    }
+
+    #[test]
+    fn vulns_not_installed_serializes_with_camel_case_install_command() {
+        let err = BrewError::VulnsNotInstalled {
+            install_command: "brew install homebrew/brew-vulns/brew-vulns".into(),
+        };
+        let v: Value = serde_json::to_value(&err).unwrap();
+        assert_eq!(v["code"], "vulns_not_installed");
+        assert_eq!(
+            v["installCommand"],
+            "brew install homebrew/brew-vulns/brew-vulns"
+        );
+        assert!(
+            v.get("install_command").is_none(),
+            "must not emit snake_case `install_command`"
+        );
     }
 
     // ---- truncate helpers ----

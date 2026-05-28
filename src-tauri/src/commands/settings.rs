@@ -141,6 +141,26 @@ pub struct Settings {
     /// `require_enhanced_trending` denies even with this flag set.
     #[serde(default)]
     pub enhanced_trending_enabled: bool,
+
+    /// v0.5.0 — opt-in vulnerability scanning of installed Homebrew
+    /// formulae. When **false** (default), the app makes no vulnerability
+    /// queries and surfaces no CVE badges. When **true**, the backend
+    /// shells out to the official `brew vulns --json` subcommand (which
+    /// queries OSV.dev via its GIT ecosystem) and, when [`Self::github_enabled`]
+    /// is also on, enriches GHSA-prefixed results via the GitHub
+    /// Advisories API.
+    ///
+    /// Distinct trust boundary from the always-on Homebrew endpoints:
+    /// `brew vulns` is an official Homebrew subcommand but it talks to
+    /// `api.osv.dev` (Google) and indirectly to the source forges
+    /// (github.com, gitlab.com, codeberg.org) for version-tag lookups.
+    /// See `memory-bank/security.md` for the endpoint audit and
+    /// `README.md` for the disclosed outbound paths.
+    ///
+    /// Paranoid mode overrides this regardless: when paranoid is on,
+    /// `require_vulnerability_scanning` denies even with this flag set.
+    #[serde(default)]
+    pub vulnerability_scanning_enabled: bool,
 }
 
 /// Default factory for [`Settings::ai_features_enabled`] — separated
@@ -179,6 +199,11 @@ impl Default for Settings {
             // badges still work without this — they're computed from
             // the always-on Homebrew analytics windows.
             enhanced_trending_enabled: false,
+            // Off by default per v0.5.0 plan: no vulnerability scanning
+            // until the user explicitly opts in via Settings → Network.
+            // No `brew vulns` invocation, no OSV traffic, no GHSA lookups
+            // until then.
+            vulnerability_scanning_enabled: false,
         }
     }
 }
@@ -598,6 +623,7 @@ mod tests {
             update_auto_check: true,
             skipped_update_versions: vec!["0.3.0".into(), "0.3.1".into()],
             enhanced_trending_enabled: true,
+            vulnerability_scanning_enabled: true,
         };
         let written = persist(tmp.path(), s.clone()).await.expect("persist");
         assert_eq!(written, s);
@@ -657,6 +683,7 @@ mod tests {
             update_auto_check: false,
             skipped_update_versions: Vec::new(),
             enhanced_trending_enabled: false,
+            vulnerability_scanning_enabled: false,
         };
         let written = persist(tmp.path(), s).await.expect("persist");
         assert_eq!(written.catalog_stale_banner_days, Settings::CATALOG_STALE_DAYS_MAX);
@@ -993,6 +1020,79 @@ mod tests {
         let reloaded = load_async(tmp.path()).await;
         match reloaded {
             SettingsLoadState::Loaded(loaded) => assert!(loaded.enhanced_trending_enabled),
+            other => panic!("expected Loaded, got {other:?}"),
+        }
+    }
+
+    /// v0.5.0 — `vulnerability_scanning_enabled` defaults to false. Load-
+    /// bearing: no `brew vulns` subprocess, no OSV traffic, no GHSA lookups
+    /// until the user opts in via Settings → Network.
+    #[test]
+    fn vulnerability_scanning_defaults_to_false() {
+        let s = Settings::default();
+        assert!(
+            !s.vulnerability_scanning_enabled,
+            "vulnerability scanning must be OFF by default — feature is opt-in"
+        );
+    }
+
+    /// v0.5.0 — older `settings.json` files written before the field
+    /// existed must read cleanly with the field absent → false. Locks the
+    /// forward-compat behaviour so a v0.4.x user upgrading to v0.5.0 gets
+    /// the opt-in posture, not a silent enable.
+    #[tokio::test]
+    async fn missing_vulnerability_scanning_field_defaults_to_false() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = settings_path(tmp.path());
+        // Write a v0.4.x-shape settings.json with the new field absent.
+        tokio::fs::write(
+            &path,
+            br#"{"paranoidMode": false, "catalogStaleBannerDays": 14, "enhancedTrendingEnabled": true}"#,
+        )
+        .await
+        .unwrap();
+
+        let state = load_at_startup(tmp.path());
+        match state {
+            SettingsLoadState::Loaded(s) => {
+                assert!(
+                    !s.vulnerability_scanning_enabled,
+                    "missing field must default to false (opt-in posture)"
+                );
+                // Sanity: the field present in the source file still loaded.
+                assert!(s.enhanced_trending_enabled);
+            }
+            other => panic!("expected Loaded, got {other:?}"),
+        }
+    }
+
+    /// v0.5.0 — `vulnerability_scanning_enabled` round-trips on the wire
+    /// as camelCase `vulnerabilityScanningEnabled`. Pin the wire shape so
+    /// a future serde rename doesn't silently break the frontend store.
+    #[tokio::test]
+    async fn vulnerability_scanning_round_trips_with_camel_case_key() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let s = Settings {
+            vulnerability_scanning_enabled: true,
+            ..Settings::default()
+        };
+        persist(tmp.path(), s.clone()).await.expect("persist");
+
+        let raw = tokio::fs::read_to_string(settings_path(tmp.path()))
+            .await
+            .expect("read raw");
+        assert!(
+            raw.contains("\"vulnerabilityScanningEnabled\""),
+            "expected camelCase key in raw JSON, got: {raw}"
+        );
+        assert!(
+            !raw.contains("\"vulnerability_scanning_enabled\""),
+            "must not emit snake_case key"
+        );
+
+        let reloaded = load_async(tmp.path()).await;
+        match reloaded {
+            SettingsLoadState::Loaded(loaded) => assert!(loaded.vulnerability_scanning_enabled),
             other => panic!("expected Loaded, got {other:?}"),
         }
     }

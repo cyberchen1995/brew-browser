@@ -1,57 +1,65 @@
 # Active Context
 
-**Date:** 2026-05-26 (v0.4.0 fully deployed and PR'd)
-**State:** All 9 steps of the v0.4.0 plan complete. Branch `feat/v0.4.0-velocity-and-history` is 7+ commits ahead of `main`; deploy verified end-to-end on `brew-browser.zerologic.com` (endpoint 200, POST 405, IP-redacted logs auditable via `grep -c remote_ip → 0`); cron live, first nightly snapshot fires Wed 03:00. PR open against `main`. Once it merges, the v0.4.0 release follows the standard pipeline (sign + notarize + publish manifest + tag GH release + asset rename + manifest rsync). Workflow rule (durable): PRs into main, no direct pushes.
+**Date:** 2026-05-27 (v0.5.0 ready for PR / review — post-smoke-test cycle)
+**State:** All 8 steps of the v0.5.0 plan complete on branch `feat/v0.5.0-vulnerability-scanning`, PLUS a 5-bug smoke-test cycle that surfaced and resolved every subprocess-integration assumption that was wrong. Opt-in vulnerability scanning via `brew vulns` ships behind a per-feature Settings toggle, with the install-set fingerprint optimisation, optional GHSA enrichment when GitHub auth is on, and the full UI surface (Settings card + Dashboard Exposure card + Sidebar count badge + PackageRow severity dot + PackageDetail Security card). Awaiting PR + merge + release cut.
 
 ## Repo
 
 - **github.com/msitarzewski/brew-browser** — public, MIT
-- **Released:** v0.1.0, v0.2.0, v0.2.1, v0.3.0, v0.3.1 (live on GitHub Releases — `gh release list`)
-- **Working toward:** v0.4.0 (PR'd; ship follows merge)
-- **Branch:** `feat/v0.4.0-velocity-and-history`
-- **Stars:** 18 (as of v0.3.1 ship)
+- **Released:** v0.1.0, v0.2.0, v0.2.1, v0.3.0, v0.3.1, v0.4.0 (live on GitHub Releases — `gh release list`)
+- **Working toward:** v0.5.0 (branch ready; PR follows docs commit)
+- **Branch:** `feat/v0.5.0-vulnerability-scanning`
+- **Stars:** 18+ (as of v0.4.0 ship)
 
-## v0.4.0 shipped on the branch (Steps 1–9)
+## v0.5.0 shipped on the branch (Steps 1–8)
 
-Full file:line detail + decisions + verification narrative in `tasks/2026-05/19-v0.4.0-backend.md`. Bullet summary:
+Full file:line detail + decisions + verification narrative in `tasks/2026-05/20-v0.5.0-vulnerability-scanning.md`. Bullet summary:
 
-- **Step 1** — `Settings.enhanced_trending_enabled` (default `false`, forward-compat tested), `state::require_enhanced_trending()` gate composing master paranoid with per-feature toggle, new `BrewError::FeatureDisabled` variant.
-- **Step 2** — Parallel `install` + `install-on-request` fetch, `velocity_index(c30, c90, c365) → Option<f64>` pure-math helper (compares recent month vs prior 11-month average so brand-new packages return None instead of saturating the leaderboard at 12.17), server-side velocity back-fill from 3-window join via `tokio::task::JoinSet`.
-- **Step 3** — New `trending::history::{mod, client, cache}` module, two IPCs (`trending_history_index`, `trending_history_fetch`), per-package LRU cache (cap 500, TTL 6h), path-traversal-safe URL builder.
-- **Step 4** — `SettingsSectionTrendingHistory.svelte` opt-in subsection at the bottom of Network. 6th `pathStatuses` entry. `feature_disabled` variant in `BrewErrorPayload` with friendly toast routing.
-- **Step 5** — Trending tab restructure: default sort velocity desc, new Velocity column with 🔥/❄️/dash badges, count cell becomes vertical-flex with inline `TrendingSparkline` beneath. 8-col responsive grid. New shared `TrendingSparkline.svelte` (inline + detail variants). New `trendingHistory.svelte.ts` store.
-- **Step 6** — PackageDetail integration: detail-variant sparkline mounted in a new `trend-card` section. Strictly passive when toggle off (no placeholder).
-- **Step 7** — `tools/trending-collector/` Node 20+ ESM cron + SQLite + JSON output. Deploys to `brew-browser.zerologic.com:/home/michael/Sites/brew-trending-collector/`. Seed-from-rolling-windows bootstrap means day-zero charts have data.
-- **Step 8** — Memory bank + docs: projectbrief nine → ten paths, decisions.md ADR, security.md §16 endpoint audit, techContext.md / backendApi.md §13.14 / frontendComponents.md updates, docs/release-notes/0.4.0.md, README disclosure refresh.
-- **Step 9** — Caddy block deployed (handle_path /trending-history/* + site-wide IP-redacted log via `format filter { wrap json; fields { ... delete } }`), cron live, verification curls all green, privacy claim auditable.
+- **Step 1** — `Settings.vulnerability_scanning_enabled` (default `false`, forward-compat tested), `state::require_vulnerability_scanning()` gate composing master paranoid with per-feature toggle, new `BrewError::VulnsNotInstalled { install_command }` variant routing the user to the one-click installer affordance instead of a generic exit-non-zero toast. Five rejection paths pinned by tests (toggle off, paranoid on, paranoid-wins-over-toggle, FirstLaunch, Corrupt).
+- **Step 2** — New `src-tauri/src/vulns/{client,cache,fingerprint,enrich}.rs` module (~2,100 lines). `client` invokes `brew vulns --json` via `tokio::process::Command`, parses with serde-default defenses, exposes `check_brew_vulns_installed` + `scan_all` + `scan_one` + `install_brew_vulns`. `cache` is the persistent `vulns_cache.json` layer (1 MiB cap, atomic-write, fail-soft, 6h per-record TTL). `fingerprint` produces a deterministic SHA-256 over sorted `kind:name:version` lines for the whole-scan skip predicate. New `sha2 = "0.10"` + `hex = "0.4"` deps.
+- **Step 3** — Four IPC commands: `vulns_scan_all(force)`, `vulns_scan_one(name)`, `vulns_install_helper`, `vulns_invalidate(kind, name, version)`. Gate composition documented inline + pinned by tests. `vulns_install_helper` intentionally bypasses the per-feature toggle (first-run flow is "install → toggle on → scan"); still respects master paranoid gate.
+- **Step 4** — GHSA enrichment via `vulns::enrich::enrich()`. Fetches `api.github.com/advisories/{GHSA_ID}` when (a) the OSV record carries a `GHSA-…` ID AND (b) `settings.github_enabled` is on AND (c) the master paranoid gate is off — triple-defense. Parallel cache at `ghsa_cache.json` (2 MiB cap). Best-effort: 403/429/network error leaves the OSV record unchanged and logs (no toast).
+- **Step 5** — Frontend store `src/lib/stores/vulnerabilities.svelte.ts` (~350 lines). `byPackage` Map keyed by `"{kind}:{name}"`, `severityCounts` derived rollup, `scanAll` / `scanOne` / `installHelper` / `invalidate` wrappers, sync lookups for inline UI consumers (`maxSeverityFor`, `vulnsFor`). Error routing: `vulns_not_installed` → captured for Settings card install affordance; everything else → `reportableToastError`. Types ported in `src/lib/types.ts`, IPC bindings in `src/lib/api.ts`.
+- **Step 6** — UI surface: new `SettingsSectionVulnerabilities.svelte` opt-in subsection mounted in `SettingsSectionNetwork.svelte` alongside Updates + Enhanced Trending History; Dashboard `Exposure` card with severity counts + Scan-now button + ✓ clean-state framing; Sidebar count badge with max-severity tone; PackageRow inline severity dot; PackageDetail Security card with per-CVE rows, severity pills, fixed-in ranges, "Upgrade to fix" button wired to existing `brew_upgrade` pipeline. Cask rows render honest "Cask coverage isn't supported — brew vulns is formula-only" message rather than fake clean state.
+- **Step 7** — Refresh-feed integration: post-`brew update` fan-out (Dashboard Refresh, Library Refresh) fires `vulnerabilities.scanAll(force=false)` so freshly learned upstream versions get scanned. Post-mutation hooks (install / upgrade / uninstall in `packages.svelte.ts`) call `vulns_invalidate(kind, name, version)` + `vulnerabilities.scanOne(name)` so the affected package's CVE row reflects the new state immediately. The `force=false` parameter on the post-update scan means the install-set fingerprint skip predicate still applies — a refresh that didn't change install state won't re-shell `brew vulns`.
+- **Step 8** — Memory bank + docs (this commit): projectbrief ten → eleven paths, decisions.md ADR, security.md §17 endpoint audit, techContext.md (brew-vulns + sha2/hex deps), backendApi.md §13.15, frontendComponents.md v0.5.0 additions block, `docs/release-notes/0.5.0.md`, README disclosure refresh, task record `tasks/2026-05/20-v0.5.0-vulnerability-scanning.md`.
 
 ## Tests & lint at PR-open
 
-- `cargo test`: **507 passed**, 0 failed, 6 ignored (473 → 507, +34 new)
-- `cargo build`: clean
-- `npm run check`: 0 errors, 3 pre-existing warnings (same as v0.3.1 baseline)
-- `node --check` on every collector .js file: clean
-- `caddy validate` on deployed config: clean
+- `cargo test`: **585 passed**, 0 failed, 6 ignored (507 → 585, +78 new — the +6 over the original +72 is the captured-fixture suite added during the smoke-test cycle)
+- `cargo build`: clean (zero dead-code warnings — every new symbol is wired)
+- `npm run check`: 0 errors, 3 pre-existing warnings (v0.4.0 baseline)
+- `npm run build`: clean Vite build
 
-## Production verification (brew-browser.zerologic.com)
+## Smoke-test cycle (2026-05-27)
 
-- `curl -I /trending-history/index.json` → 200, no `Set-Cookie`, no `Server` header, expected security headers all present, `cache-control: public, max-age=21600`
-- `curl -IX POST` → 405
-- `curl -I /trending-history/formula/wget.json` → 200
-- `curl -I /trending-history/formula/nonexistent.json` → 404
-- `grep -cE 'remote_ip|client_ip|X-Forwarded-For|X-Real-Ip' /var/log/caddy/brew-browser.log` → 0 (privacy claim verified)
-- Cron dry-run: 43s, 12/12 endpoints succeeded, 101 new rows beyond seed, 500 index entries + 18,028 per-package files written
-- Real leaderboard top: hermes-agent (v=1372), raullenchai/rapid-mlx (v=159), grafana/gcx (v=140), openssl@4 (v=129) — genuine adoption signal
+Five integration bugs surfaced + fixed during the first end-to-end smoke test on the user's real install (326 packages, 11 vulnerable). Each required either a real `brew` subprocess or the actual `brew vulns` binary on disk — none were catchable by unit-test sandbox. Full table + lessons in `tasks/2026-05/20-v0.5.0-vulnerability-scanning.md` under "Smoke test cycle". Summary:
 
-## Workflow change (durable)
+1. `brew commands --include-aliases` errors without `--quiet` (modern brew 5.x) — added `--quiet`, then superseded
+2. `brew commands` doesn't list external `brew-FOO` formula shims — switched install probe to `brew --prefix brew-vulns`
+3. JSON severity is UPPERCASE in wire — custom case-folding `Deserialize` impl (also accepts `MODERATE` → Medium)
+4. JSON uses `fixed_versions: [String]` (array), not `fixed_in: String` — `first_string_or_none` deserializer maps array's first element into the existing `fixed_in: Option<String>` field
+5. `brew vulns --json` exits 1 when findings present (CI-scanner convention) — new `run_vulns_capture` helper accepts exit 0 OR 1 as success, only typed-errors on ≥ 2
 
-From this branch onward, merges to `main` go through pull requests — push branch, `gh pr create`, review/CI, merge. No more direct pushes to `main`. Persisted in `~/.claude/projects/-Users-michael-Clean/memory/feedback_pr_workflow.md`.
+Regression-pinned by the captured-fixture test `vulns::client::tests::raw_scan_result_parses_real_brew_vulns_output` using real `brew vulns --json` output from the user's install. All five failure modes are commented at their trap sites in `vulns/client.rs` so future maintainers see why the fix exists.
+
+## Decisions locked (per-decision rationale in task #20 + decisions.md ADR)
+
+- **Why shell out to brew-vulns instead of native OSV query?** Inherits upstream fixes automatically; correct attribution ("Powered by brew vulns"); escape hatch via the internal interface if upstream stagnates. Cost: requires brew-vulns to be installed (we provide the one-click installer).
+- **Why GHSA enrichment is best-effort?** GHSA enrichment is a UX nicety, not a correctness requirement. A 403/429/network error from `api.github.com` should not break the whole scan; we leave the OSV record unchanged and log without toasting.
+- **Why install-set SHA-256 fingerprint?** `DefaultHasher` is non-deterministic across runs (HashDoS defense) — a hash recorded in v0.5.0 disk cache would mismatch every subsequent launch, silently invalidating the skip predicate. SHA-256 is deterministic across runs, machines, Rust versions.
+- **Why opt-in?** Adds an eleventh outbound path (`api.osv.dev` via subprocess + `api.github.com/advisories` from our code). The first-launch posture stays "zero outbound beyond what the user has explicitly consented to."
+- **Casks not supported.** `brew vulns` is formula-only; we render honest "coverage isn't supported" rather than fake clean state.
+
+## Workflow note
+
+Branch ready for PR. Follows the durable v0.4.0+ workflow: push branch → `gh pr create` → review → merge. No direct pushes to `main`.
 
 ## What's left
 
-- Merge the PR.
-- Cut the v0.4.0 release: `tools/build/sign-and-notarize.sh` → `tools/release/publish-manifest.sh 0.4.0` → `gh release create v0.4.0 ...` → `gh api PATCH` for the asset rename → manifest rsync to `brew-browser.zerologic.com:Sites/brew-browser/updater.json`. Same flow as v0.3.1; Tauri-release gotchas in cross-session memory `tauri_release_pipeline_gotchas.md`.
+- Open PR for the v0.5.0 branch.
+- Cut the v0.5.0 release after merge: `tools/build/sign-and-notarize.sh` → `tools/release/publish-manifest.sh 0.5.0` → `gh release create v0.5.0 ...` → `gh api PATCH` for asset rename → manifest rsync to `brew-browser.zerologic.com:Sites/brew-browser/updater.json`. Same flow as v0.4.0; Tauri-release gotchas in cross-session memory `tauri_release_pipeline_gotchas.md`.
 
 ## Memory bank inventory
 
-`toc.md`, `projectbrief.md`, `techContext.md`, `decisions.md`, `activeContext.md` (this), `progress.md`, `systemPatterns.md`, `designSystem.md`, `uxArchitecture.md`, `visualStory.md`, `backendApi.md`, `frontendComponents.md`, `codeReview.md`, `apiTests.md`, `accessibility.md`, `realityCheck.md`, `security.md`, `ideas.md`, `agentLog.md` (dormant), `NEXT-SESSION.md`, `tasks/2026-05/` (19 task records + README + deferred), `phases/`, `scans/2026-05-23/`.
+`toc.md`, `projectbrief.md`, `techContext.md`, `decisions.md`, `activeContext.md` (this), `progress.md`, `systemPatterns.md`, `designSystem.md`, `uxArchitecture.md`, `visualStory.md`, `backendApi.md`, `frontendComponents.md`, `codeReview.md`, `apiTests.md`, `accessibility.md`, `realityCheck.md`, `security.md` (now through §17), `ideas.md`, `agentLog.md` (dormant), `NEXT-SESSION.md`, `tasks/2026-05/` (20 task records + README + deferred), `phases/`, `scans/2026-05-23/`.

@@ -5,6 +5,8 @@
   import HardDrive from "@lucide/svelte/icons/hard-drive";
   import CheckCircle2 from "@lucide/svelte/icons/check-circle-2";
   import AlertCircle from "@lucide/svelte/icons/alert-circle";
+  import ShieldAlert from "@lucide/svelte/icons/shield-alert";
+  import ShieldCheck from "@lucide/svelte/icons/shield-check";
 
   import Button from "./Button.svelte";
   import Pill from "./Pill.svelte";
@@ -24,6 +26,7 @@
   import { activity } from "$lib/stores/activity.svelte";
   import { github } from "$lib/stores/github.svelte";
   import { settings } from "$lib/stores/settings.svelte";
+  import { vulnerabilities } from "$lib/stores/vulnerabilities.svelte";
   import { brewUpdate, brewUpgrade, diskUsage, diskUsageClearCache, openInFinder } from "$lib/api";
   import UpgradeModal from "./UpgradeModal.svelte";
   import { toast } from "$lib/stores/toast.svelte";
@@ -129,6 +132,13 @@
       // success toast below covers the user-visible outcome.
       await packages.load(true).catch(() => {});
 
+      // v0.5.0 — kick a vuln re-scan now that packages.installed is fresh.
+      // Fire-and-forget: scanIfNeeded is internally fingerprint-skipped, so
+      // it's cheap when nothing changed, and any error routes through the
+      // store's own toast handling. Wrapping in catch() so a thrown promise
+      // doesn't propagate out of refreshCatalog.
+      vulnerabilities.scanIfNeeded().catch(() => {});
+
       toast.success("Refreshed", "brew taps + catalog + installed list all current");
     } catch (e) {
       reportableToastError("Refresh failed", e);
@@ -185,6 +195,56 @@
   });
 
   let personalGithubTotal = $derived(installedGithubHomepages.length);
+
+  // ────────────────────────────────────────────────────────────────
+  // v0.5.0 — Exposure card (vulnerability scanning rollup)
+  //
+  // Renders only when the feature is enabled (no nag when off — the
+  // Settings → Network section is the canonical discovery surface).
+  // Three sub-states once enabled: never-scanned, scanned-clean,
+  // scanned-with-findings. The "Scan now" button mirrors the Storage
+  // card's Refresh control for visual consistency.
+
+  /** Hide the entire card unless the user has opted in. We don't even
+      render a "scan disabled" stub — the Dashboard is dense and the
+      Settings panel handles discovery. */
+  let exposureVisible = $derived(
+    settings.effective.vulnerabilityScanningEnabled === true,
+  );
+
+  let exposureCounts = $derived(vulnerabilities.severityCounts);
+  let exposureScannedAt = $derived(vulnerabilities.lastScannedAt);
+  let exposureSource = $derived(vulnerabilities.source);
+  let exposureLoading = $derived(vulnerabilities.loading);
+
+  /** Same RelativeTimeFormat as the Settings card — same UX language. */
+  const EXPOSURE_RELATIVE = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  function exposureRelative(d: Date | null): string {
+    if (!d) return "never";
+    const deltaSec = Math.round((d.getTime() - Date.now()) / 1000);
+    const abs = Math.abs(deltaSec);
+    if (abs < 60) return EXPOSURE_RELATIVE.format(deltaSec, "second");
+    if (abs < 3600) return EXPOSURE_RELATIVE.format(Math.round(deltaSec / 60), "minute");
+    if (abs < 86400) return EXPOSURE_RELATIVE.format(Math.round(deltaSec / 3600), "hour");
+    return EXPOSURE_RELATIVE.format(Math.round(deltaSec / 86400), "day");
+  }
+  let exposureLastLabel = $derived(exposureRelative(exposureScannedAt));
+
+  async function scanExposureNow() {
+    await vulnerabilities.scanAll(true);
+  }
+
+  /** Jump to Library with the "vulnerable" filter pre-selected, so the
+      user lands on the list of packages with known CVEs rather than
+      "all installed". The pill is gated on `vulnerabilities.enabled`
+      in Library — which is guaranteed true here because this function
+      is only callable from the Exposure card, which is itself gated
+      on the same flag. setSection FIRST so any chip clears don't
+      stomp our filter pick. */
+  function viewVulnerablePackages() {
+    ui.setSection("library");
+    library.setFilter("vulnerable");
+  }
 
   function fmtBytes(b: number): string {
     if (b < 1024) return `${b} B`;
@@ -385,6 +445,16 @@
       if (result.success) {
         toast.success(`Upgraded ${counts.outdated} packages`);
         packages.load(true);
+        // v0.5.0 — every upgraded package gets a new version, invalidating
+        // its old vuln record. Easiest path: re-scan the whole set. The
+        // scanIfNeeded fingerprint catches the install-set change. After
+        // the scan completes, surface the once-per-session exposure
+        // heads-up so the user sees the security context of their
+        // post-upgrade install.
+        vulnerabilities
+          .scanIfNeeded()
+          .then(() => vulnerabilities.maybeNotifyExposure())
+          .catch(() => {});
       } else {
         toast.error("Upgrade-all finished with errors");
       }
@@ -744,6 +814,102 @@
           </ul>
         {/if}
       </section>
+
+      <!-- v0.5.0 — Exposure card. Opt-in only; hidden entirely when
+           the Settings → Vulnerability Scanning toggle is off so the
+           dashboard doesn't nag users who haven't enabled it. -->
+      {#if exposureVisible}
+        <section class="card">
+          <div class="card-head">
+            <h2>
+              <span class="exp-card-icon">
+                {#if exposureScannedAt && exposureCounts.vulnerablePackages === 0}
+                  <ShieldCheck size={16} />
+                {:else}
+                  <ShieldAlert size={16} />
+                {/if}
+              </span>
+              Exposure
+            </h2>
+            <div class="head-right">
+              {#if exposureScannedAt}
+                <span class="text-muted total">Last scan: {exposureLastLabel}</span>
+              {/if}
+              <Button
+                size="sm"
+                variant="ghost"
+                onclick={scanExposureNow}
+                ariaLabel="Scan installed packages for vulnerabilities"
+                title="Re-run brew vulns against every installed formula"
+                disabled={exposureLoading}
+              >
+                {#snippet icon()}<RefreshCw size={14} />{/snippet}
+                {exposureLoading ? "Scanning…" : "Scan now"}
+              </Button>
+            </div>
+          </div>
+          <div class="exp-body">
+            {#if !exposureScannedAt}
+              <!-- Never scanned: gentle CTA, not a warning. -->
+              <p class="exp-cta">
+                Scan installed packages for known vulnerabilities using
+                <code>brew vulns</code> and OSV.dev.
+              </p>
+            {:else if exposureCounts.vulnerablePackages === 0}
+              <!-- Clean. This is a GOOD result — frame it positively. -->
+              <div class="exp-clean">
+                <CheckCircle2 size={20} />
+                <div>
+                  <strong>No known vulnerabilities.</strong>
+                  <p class="text-muted exp-sub">
+                    All installed packages are clean of advisories known to
+                    <code>brew vulns</code>{#if exposureSource} · source: {exposureSource}{/if}.
+                  </p>
+                </div>
+              </div>
+            {:else}
+              <!-- Findings present. Show per-severity counts with tone
+                   colors, plus the "X of N" summary line. -->
+              <div class="exp-sev-row" role="group" aria-label="Vulnerability counts by severity">
+                <span class="exp-sev exp-sev--danger">
+                  <strong>{fmt(exposureCounts.critical)}</strong> critical
+                </span>
+                <span class="exp-sev exp-sev--danger">
+                  <strong>{fmt(exposureCounts.high)}</strong> high
+                </span>
+                <span class="exp-sev exp-sev--warning">
+                  <strong>{fmt(exposureCounts.medium)}</strong> medium
+                </span>
+                <span class="exp-sev exp-sev--info">
+                  <strong>{fmt(exposureCounts.low)}</strong> low
+                </span>
+                {#if exposureCounts.unknown > 0}
+                  <span class="exp-sev exp-sev--neutral">
+                    <strong>{fmt(exposureCounts.unknown)}</strong> unknown
+                  </span>
+                {/if}
+              </div>
+              <p class="exp-summary">
+                <strong>{fmt(exposureCounts.vulnerablePackages)}</strong>
+                of <strong>{fmt(counts.total)}</strong>
+                installed packages have known vulnerabilities
+                {#if exposureSource}
+                  · source: <span class="exp-source">{exposureSource}</span>
+                {/if}
+              </p>
+              <div class="exp-actions">
+                <button
+                  type="button"
+                  class="link exp-link"
+                  onclick={viewVulnerablePackages}
+                >
+                  View vulnerable packages →
+                </button>
+              </div>
+            {/if}
+          </div>
+        </section>
+      {/if}
     {/if}
   </div>
 </section>
@@ -1134,6 +1300,107 @@
     gap: 6px;
     color: var(--color-text-muted);
     font-size: var(--text-body);
+  }
+
+  /* ─── Exposure card (v0.5.0 vulnerability scanning) ──── */
+  .exp-card-icon {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    margin-right: 4px;
+    color: var(--color-text-secondary);
+  }
+  .exp-body {
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  .exp-cta {
+    font-size: var(--text-body-sm);
+    color: var(--color-text-secondary);
+    line-height: var(--lh-snug);
+    margin: 0;
+  }
+  .exp-cta code {
+    font-family: var(--font-mono);
+    font-size: var(--text-mono);
+    padding: 1px 4px;
+    background: var(--color-surface-sunken);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-primary);
+  }
+  .exp-clean {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--space-3);
+    align-items: start;
+    padding: var(--space-3);
+    background: var(--color-success-subtle);
+    border-radius: var(--radius-md);
+    color: var(--color-success-on-subtle);
+  }
+  .exp-clean strong {
+    display: block;
+    color: var(--color-success-on-subtle);
+    font-size: var(--text-body);
+    font-weight: var(--fw-semibold);
+  }
+  .exp-sub {
+    margin-top: 2px;
+    font-size: var(--text-body-sm);
+    line-height: var(--lh-snug);
+  }
+  .exp-sub code {
+    font-family: var(--font-mono);
+    font-size: var(--text-mono);
+  }
+  .exp-sev-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .exp-sev {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 6px var(--space-3);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-body-sm);
+    font-weight: var(--fw-medium);
+    font-variant-numeric: tabular-nums;
+  }
+  .exp-sev strong {
+    font-size: var(--text-body);
+    font-weight: var(--fw-semibold);
+  }
+  .exp-sev--danger  { background: var(--color-danger-subtle);  color: var(--color-danger-on-subtle); }
+  .exp-sev--warning { background: var(--color-warning-subtle); color: var(--color-warning-on-subtle); }
+  .exp-sev--info    { background: var(--color-info-subtle);    color: var(--color-info-on-subtle); }
+  .exp-sev--neutral { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
+  .exp-summary {
+    font-size: var(--text-body-sm);
+    color: var(--color-text-secondary);
+    line-height: var(--lh-normal);
+    margin: 0;
+  }
+  .exp-summary strong {
+    color: var(--color-text-primary);
+    font-weight: var(--fw-semibold);
+    font-variant-numeric: tabular-nums;
+  }
+  .exp-source {
+    font-family: var(--font-mono);
+    font-size: var(--text-mono);
+    color: var(--color-text-muted);
+  }
+  .exp-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .exp-link {
+    font-size: var(--text-body-sm);
   }
 
   /* ─── Error card ──────────────────────────────────────── */

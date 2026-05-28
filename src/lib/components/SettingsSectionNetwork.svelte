@@ -28,6 +28,7 @@
   import { settings } from "$lib/stores/settings.svelte";
   import SettingsSectionUpdates from "$lib/components/SettingsSectionUpdates.svelte";
   import SettingsSectionTrendingHistory from "$lib/components/SettingsSectionTrendingHistory.svelte";
+  import SettingsSectionVulnerabilities from "$lib/components/SettingsSectionVulnerabilities.svelte";
   import type {
     CaskIconMode,
     CatalogAutoRefresh,
@@ -320,6 +321,11 @@
          boundary (project infra, not Homebrew first-party). Lives in
          Network because it's a network opt-in. -->
     <SettingsSectionTrendingHistory />
+
+    <!-- v0.5.0: Vulnerability scanning — opt-in, OSV.dev + GitHub
+         Advisories trust boundary. Lives in Network because it's a
+         network opt-in. -->
+    <SettingsSectionVulnerabilities />
 
     <!-- Phase 15: Updates subsection lives at the bottom of Network. -->
     <SettingsSectionUpdates />

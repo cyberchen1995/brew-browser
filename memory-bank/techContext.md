@@ -18,6 +18,8 @@
 | Test framework — backend | Rust built-in: `#[test]` for unit, `#[tokio::test]` for async, `#[ignore]` for integration tests that shell out to `brew`. 473 unit tests at v0.3.0. | (stdlib) |
 | Test framework — frontend | `svelte-check` against the SvelteKit + TS sources (typecheck only — no Vitest yet; backend is the load-bearing test surface). | 4.x |
 | Crypto (updater signature verification) | minisign via `tauri-plugin-updater` 2.x; embedded `UPDATER_PUBKEY` const in `src-tauri/src/lib.rs` | 2.10.x |
+| Crypto (install-set fingerprint, v0.5.0+) | `sha2` (SHA-256) + `hex` (lowercase hex encoding) — used by `vulns::fingerprint::compute()` to produce a deterministic install-set fingerprint for the vulnerability-scan whole-scan skip predicate | `sha2 = "0.10"`, `hex = "0.4"` |
+| Vulnerability scanning (v0.5.0+) | `Homebrew/homebrew-brew-vulns` — official Homebrew subcommand by Andrew Nesbitt (Jan 2026). Shelled out via `tokio::process::Command::new(brew).args(["vulns", ...])` from `src-tauri/src/vulns/client.rs`. Talks to `api.osv.dev` (OSV GIT ecosystem) and the source forges (`github.com`, `gitlab.com`, `codeberg.org`) for source-URL → version-tag resolution. Installed on demand via the one-click `vulns_install_helper` IPC (`brew install homebrew/brew-vulns/brew-vulns`). | n/a (external) |
 
 ## Host environment
 
@@ -78,6 +80,18 @@ Serialize concurrent `brew` invocations using a `tokio::sync::Mutex<()>` in Taur
 **Day-zero seed trick:** the bootstrap (`seed.js`) derives three historical "buckets" per package from rolling-window subtraction (c30, c90-c30, c365-c90), tagged `source='seed'`, so charts have data the day the collector turns on. From day 1 onward the nightly collector accumulates real daily snapshots; after ~30 days, adjacent-day `count_30d` subtraction produces clean per-day install estimates that dominate the chart visually.
 
 **Privacy posture for the project-operated endpoint:** IP redacted at the Caddy log layer (`request>remote_ip "0.0.0.0"`), no cookies set/accepted, GET-only (writes 405), 6h Cache-Control. Documented + auditable in `security.md` §16 (the actual Caddy snippet lives there so anyone can `cat Caddyfile` on the server and verify).
+
+## Vulnerability scanning (v0.5.0+)
+
+**Opt-in via `Settings.vulnerability_scanning_enabled` (default `false`).** When the toggle is on AND paranoid mode is off, the backend shells out to the official `brew vulns` subcommand (`Homebrew/homebrew-brew-vulns`, by Andrew Nesbitt, January 2026) to query OSV.dev for known CVEs against installed formulae.
+
+**Why shell out, not query OSV directly?** `brew vulns` already extracts source URLs from formula files, matches installed versions against vulnerable-version ranges, and queries OSV's GIT ecosystem. Inheriting upstream fixes automatically is strictly better than owning that surface ourselves. The backend module at `src-tauri/src/vulns/` is a thin orchestration layer over the subprocess: `client` (invocation + parse), `cache` (persistent on-disk cache + install-set fingerprint), `fingerprint` (SHA-256 over sorted `kind:name:version` lines for the whole-scan skip predicate), `enrich` (optional GHSA enrichment).
+
+**Cache:** `~/Library/Application Support/brew-browser/vulns_cache.json` (1 MiB cap, atomic-write, fail-soft on corrupt + future-schema, 6h TTL per record). Install-set fingerprint persisted alongside entries so opening the app daily on an unchanged install set serves the cached report instantly without re-shelling brew-vulns.
+
+**Optional GHSA enrichment:** when `settings.github_enabled` is also on, the backend fetches `api.github.com/advisories/{GHSA_ID}` for any OSV record carrying a `GHSA-…` ID. Best-effort: a failure leaves the OSV record unchanged and logs without toasting. Parallel cache at `ghsa_cache.json` (2 MiB cap, same atomic-write + read-capped pattern). See `security.md` §17 for the gate-composition audit.
+
+**Casks not supported:** `brew vulns` is formula-only (casks ship vendor binaries with their own update channels; OSV's source-URL approach doesn't map). Cask rows render the same UI shells but the Security card honestly says "Cask coverage isn't supported."
 
 ## Known sharp edges
 

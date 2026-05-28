@@ -4,7 +4,9 @@
   import Pill from "./Pill.svelte";
   import { iconCache } from "$lib/stores/iconCache.svelte";
   import { enrichment } from "$lib/stores/enrichment.svelte";
-  import type { Package } from "$lib/types";
+  import { settings } from "$lib/stores/settings.svelte";
+  import { vulnerabilities } from "$lib/stores/vulnerabilities.svelte";
+  import type { Package, Severity } from "$lib/types";
 
   interface Props {
     pkg: Package;
@@ -13,6 +15,51 @@
   }
 
   let { pkg, selected = false, onSelect }: Props = $props();
+
+  // ── Vulnerability severity dot (v0.5.0) ──
+  //
+  // Derived once per row (not per paint) so the Library scroll path
+  // stays cheap. We only render the dot when scanning is on AND this
+  // package has at least one finding — "scanned-clean" packages
+  // intentionally show nothing here per spec (positive framing lives
+  // on Dashboard/PackageDetail, not in the row list).
+  const vulnRecord = $derived(
+    settings.effective.vulnerabilityScanningEnabled
+      ? vulnerabilities.byPackage(pkg.kind, pkg.name)
+      : undefined,
+  );
+  const vulnMaxSeverity = $derived.by<Severity | null>(() => {
+    if (!vulnRecord || vulnRecord.vulns.length === 0) return null;
+    // Rank inline so we don't import the store's private helper.
+    let best: Severity = "unknown";
+    let bestRank = -1;
+    for (const v of vulnRecord.vulns) {
+      const r =
+        v.severity === "critical" ? 4
+        : v.severity === "high"   ? 3
+        : v.severity === "medium" ? 2
+        : v.severity === "low"    ? 1
+        : 0;
+      if (r > bestRank) { bestRank = r; best = v.severity; }
+    }
+    return best;
+  });
+  /** danger | warning | info | neutral — see brief's severity → tone map. */
+  const vulnTone = $derived.by<"danger" | "warning" | "info" | "neutral">(() => {
+    switch (vulnMaxSeverity) {
+      case "critical":
+      case "high":
+        return "danger";
+      case "medium": return "warning";
+      case "low":    return "info";
+      default:       return "neutral";
+    }
+  });
+  const vulnTitle = $derived.by(() => {
+    if (!vulnRecord || vulnMaxSeverity === null) return "";
+    const n = vulnRecord.vulns.length;
+    return `${n} known vulnerabilit${n === 1 ? "y" : "ies"} (highest: ${vulnMaxSeverity}). Click row to see details.`;
+  });
 
   /** AI-enriched friendly name for this row's token, or null when the
    *  AI Features toggle is off / no enrichment entry. Called inline in
@@ -93,7 +140,16 @@
   </span>
   <span class="desc truncate text-muted" title={descOf() ?? ""}>{descOf() ?? ""}</span>
   <span class="version truncate">{pkg.installedVersion ?? pkg.stableVersion ?? "—"}</span>
-  <span class="kind"><Pill tone={pkg.kind === "formula" ? "formula" : "cask"}>{pkg.kind}</Pill></span>
+  <span class="kind">
+    <Pill tone={pkg.kind === "formula" ? "formula" : "cask"}>{pkg.kind}</Pill>
+    {#if vulnMaxSeverity !== null}
+      <!-- Severity dot — colour wins by max severity. Hover tooltip
+           exposes the count and highest band; click bubbles up to the
+           row's onSelect so the user lands on PackageDetail's Security
+           card. -->
+      <span class="vuln-dot vuln-tone-{vulnTone}" title={vulnTitle} aria-label={vulnTitle}></span>
+    {/if}
+  </span>
   <span class="outdated">
     {#if pkg.outdated}
       <span class="upgrade" title="Upgrade available">
@@ -242,4 +298,28 @@
     font-size: var(--text-caption);
     color: var(--color-warning-strong); /* darker amber for AA on light surface (was --color-warning at 2.9:1) */
   }
+
+  /* ── Vulnerability severity dot (v0.5.0) ──
+     Sits inline to the right of the kind pill. Filled circle, tone-
+     coloured by max severity. No own click handler — clicking the row
+     opens PackageDetail and the Security card scrolls into view.
+     The .kind cell becomes a flex row so the dot lines up vertically
+     with the pill's baseline. */
+  .kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .vuln-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: var(--radius-full, 50%);
+    flex: none;
+    background: var(--color-text-muted);
+    box-shadow: 0 0 0 1px color-mix(in oklch, currentColor 18%, transparent);
+  }
+  .vuln-tone-danger  { background: var(--color-danger); }
+  .vuln-tone-warning { background: var(--color-warning); }
+  .vuln-tone-info    { background: var(--color-info, var(--color-text-secondary)); }
+  .vuln-tone-neutral { background: var(--color-text-muted); }
 </style>

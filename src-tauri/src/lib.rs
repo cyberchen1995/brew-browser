@@ -14,6 +14,7 @@ mod state;
 mod trending;
 mod types;
 mod util;
+mod vulns;
 
 use commands::*;
 
@@ -170,6 +171,10 @@ pub fn run() {
             update_install,
             update_skip,
             update_relaunch,
+            vulns_scan_all,
+            vulns_scan_one,
+            vulns_install_helper,
+            vulns_invalidate,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

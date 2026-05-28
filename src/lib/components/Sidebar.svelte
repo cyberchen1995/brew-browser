@@ -16,6 +16,8 @@
   import { services } from "$lib/stores/services.svelte";
   import { env } from "$lib/stores/env.svelte";
   import { search } from "$lib/stores/search.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
+  import { vulnerabilities } from "$lib/stores/vulnerabilities.svelte";
   import { normalizeServiceStatus, type PackageKind, type SearchHit } from "$lib/types";
   import Pill from "./Pill.svelte";
   import type { SidebarSection } from "$lib/types";
@@ -159,6 +161,37 @@
   function refreshEnv() {
     void env.refresh();
   }
+
+  // ───────── Vulnerability badge (v0.5.0) ─────────
+  // Surfaces a quiet pulse in the footer when the user has opted into
+  // vulnerability scanning AND we've found at least one vulnerable
+  // package. Color tone follows max-severity (any critical/high → red,
+  // medium → amber, low → blue). Clicking jumps to the Dashboard —
+  // Agent A's Exposure card is the "main view" for vuln remediation;
+  // we deliberately don't add a dedicated nav item per spec.
+  const vulnBadgeVisible = $derived(
+    settings.effective.vulnerabilityScanningEnabled === true &&
+      vulnerabilities.severityCounts.vulnerablePackages > 0,
+  );
+  const vulnBadgeTone = $derived.by<"danger" | "warning" | "info">(() => {
+    const c = vulnerabilities.severityCounts;
+    if (c.critical > 0 || c.high > 0) return "danger";
+    if (c.medium > 0) return "warning";
+    return "info";
+  });
+  const vulnBadgeCount = $derived(
+    vulnerabilities.severityCounts.vulnerablePackages,
+  );
+  const vulnBadgeTooltip = $derived.by(() => {
+    const n = vulnBadgeCount;
+    return `${n} package${n === 1 ? "" : "s"} with known vulnerabilities`;
+  });
+
+  function openVulnDashboard() {
+    // The Dashboard's Exposure card (Agent A) is the canonical landing
+    // for vuln triage — keep this in sync if that surface moves.
+    ui.setSection("dashboard");
+  }
 </script>
 
 <aside class="sidebar" class:collapsed={ui.sidebarCollapsed} aria-label="Primary navigation">
@@ -272,6 +305,19 @@
   </nav>
 
   <footer class="foot">
+    {#if vulnBadgeVisible}
+      <button
+        type="button"
+        class="vuln-badge tone-{vulnBadgeTone}"
+        title={vulnBadgeTooltip}
+        aria-label={vulnBadgeTooltip}
+        onclick={openVulnDashboard}
+      >
+        <span class="vuln-dot" aria-hidden="true"></span>
+        <span class="vuln-count">{vulnBadgeCount}</span>
+        <span class="vuln-label">vulnerable</span>
+      </button>
+    {/if}
     <button
       type="button"
       class="status"
@@ -497,6 +543,55 @@
   .status-missing .dot { background: var(--color-danger); }
   .status-unknown .dot { background: var(--color-text-muted); }
 
+  /* ── Vulnerability badge (v0.5.0) ──
+     Lives in the footer above the status row when scanning is on and
+     we've found something. Tone-coloured pill: max severity wins.
+     Same .foot gap as the status row — reads as a stack of two
+     small status indicators. */
+  .vuln-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 2px var(--space-2);
+    margin: -2px calc(-1 * var(--space-1));
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: var(--text-caption);
+    font-weight: var(--fw-medium);
+    line-height: 1;
+    cursor: pointer;
+    text-align: left;
+    white-space: nowrap;
+    transition: background-color var(--motion-duration-fast) var(--motion-ease-out);
+  }
+  .vuln-badge:hover { background: var(--color-surface-sunken); }
+  .vuln-dot {
+    width: 8px; height: 8px; border-radius: var(--radius-full);
+    background: var(--color-text-muted);
+    flex: none;
+  }
+  .vuln-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 16px;
+    min-width: 16px;
+    padding: 0 var(--space-1);
+    border-radius: var(--radius-full);
+    font-size: var(--text-caption);
+    font-weight: var(--fw-semibold);
+    line-height: 1;
+  }
+  .vuln-label { color: var(--color-text-muted); }
+
+  .vuln-badge.tone-danger  .vuln-dot   { background: var(--color-danger); }
+  .vuln-badge.tone-danger  .vuln-count { background: var(--color-danger-subtle); color: var(--color-danger-on-subtle); }
+  .vuln-badge.tone-warning .vuln-dot   { background: var(--color-warning); }
+  .vuln-badge.tone-warning .vuln-count { background: var(--color-warning-subtle); color: var(--color-warning-on-subtle); }
+  .vuln-badge.tone-info    .vuln-dot   { background: var(--color-info, var(--color-text-secondary)); }
+  .vuln-badge.tone-info    .vuln-count { background: var(--color-info-subtle); color: var(--color-info-on-subtle); }
+
   /* ── Collapsed sidebar (icon-rail mode) ──
      Width drops from 200 → 56 px. Everything that depends on width
      collapses to icon-only and centres in the rail. Native `title`
@@ -541,4 +636,17 @@
     padding: 4px;
   }
   .sidebar.collapsed .status-label { display: none; }
+
+  /* Vuln badge in collapsed rail: keep the count pill (small numeric
+     signal stays useful even in icon-only mode), drop the "vulnerable"
+     word. The dot is redundant with the count pill's own color tone, so
+     hide it too to keep the rail uncluttered. */
+  .sidebar.collapsed .vuln-badge {
+    justify-content: center;
+    margin: 0;
+    padding: 4px;
+    gap: 0;
+  }
+  .sidebar.collapsed .vuln-dot,
+  .sidebar.collapsed .vuln-label { display: none; }
 </style>

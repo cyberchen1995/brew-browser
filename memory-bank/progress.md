@@ -756,3 +756,58 @@ Caddy 2.x's log-filter syntax bit us three times. The deployed-as-is block is no
 ### Status
 
 **Step 9 complete.** PR open against `main`. After merge: cut the v0.4.0 release via the standard pipeline (`sign-and-notarize.sh` → `publish-manifest.sh 0.4.0` → `gh release create` → `gh api PATCH` for asset rename → manifest rsync). Tauri-release gotchas reference: `~/.claude/projects/-Users-michael-Clean/memory/tauri_release_pipeline_gotchas.md`.
+
+## 2026-05-27 (v0.5.0 ready for PR — opt-in vulnerability scanning)
+
+Branch `feat/v0.5.0-vulnerability-scanning` off `main`. Full file:line detail in `tasks/2026-05/20-v0.5.0-vulnerability-scanning.md`. All 8 steps complete; PR follows the docs commit.
+
+### Done (all 8 steps)
+
+- ✅ **Step 1** — `Settings.vulnerability_scanning_enabled: bool` (default `false`, forward-compat tested). `state::AppState::require_vulnerability_scanning()` gate composing master paranoid with per-feature toggle. New `BrewError::VulnsNotInstalled { install_command }` variant so the frontend can route the user to the one-click installer affordance instead of a generic exit-non-zero toast. Five rejection paths pinned by tests.
+- ✅ **Step 2** — `src-tauri/src/vulns/{client,cache,fingerprint,enrich}.rs` module (~2,100 lines). `client` shells out to `brew vulns --json`; `cache` is the persistent `vulns_cache.json` layer (1 MiB cap, atomic-write, 6h per-record TTL); `fingerprint` produces a deterministic SHA-256 over sorted `kind:name:version` lines via new `sha2 = "0.10"` + `hex = "0.4"` deps. Fail-soft on corrupt + future-schema.
+- ✅ **Step 3** — Four IPCs (`vulns_scan_all(force)`, `vulns_scan_one(name)`, `vulns_install_helper`, `vulns_invalidate(kind, name, version)`). Gate composition pinned. `vulns_install_helper` intentionally bypasses the per-feature toggle (first-run flow is "install → toggle on → scan") but still respects the master paranoid gate via `require_network`.
+- ✅ **Step 4** — GHSA enrichment via `vulns::enrich::enrich()`. Fetches `api.github.com/advisories/{GHSA_ID}` when (a) OSV record has a `GHSA-…` ID AND (b) `settings.github_enabled` is on AND (c) master paranoid gate is off (triple-defense). Parallel `ghsa_cache.json` (2 MiB cap). Best-effort: 403/429/network error leaves the OSV record unchanged and logs (no toast).
+- ✅ **Step 5** — Frontend store `src/lib/stores/vulnerabilities.svelte.ts` (~350 lines). `byPackage` Map keyed by `"{kind}:{name}"`, `severityCounts` derived rollup, IPC wrappers, sync lookups for inline consumers. Error routing: `vulns_not_installed` → Settings card install affordance; everything else → `reportableToastError`. Types in `src/lib/types.ts`, IPC bindings in `src/lib/api.ts`.
+- ✅ **Step 6** — UI surface: new `SettingsSectionVulnerabilities.svelte` opt-in subsection; Dashboard `Exposure` card with severity counts + ✓ clean-state framing; Sidebar count badge with max-severity tone; PackageRow inline severity dot; PackageDetail Security card with per-CVE rows + "Upgrade to fix" button wired to existing `brew_upgrade` pipeline. Cask rows render honest "Cask coverage isn't supported — brew vulns is formula-only" message.
+- ✅ **Step 7** — Refresh-feed integration: post-`brew update` fan-out (Dashboard Refresh, Library Refresh) fires `vulnerabilities.scanAll(force=false)` so freshly learned upstream versions get scanned, with the install-set fingerprint skip predicate still applying when nothing changed. Post-mutation hooks (install / upgrade / uninstall) call `vulns_invalidate` + `vulnerabilities.scanOne(name)` so affected packages reflect the new state immediately.
+- ✅ **Step 8** — Memory bank + docs (this commit): projectbrief.md ten → eleven outbound paths; decisions.md ADR `2026-05-27: Opt-in vulnerability scanning via brew vulns (v0.5.0)`; security.md §17 full endpoint audit + threat-model table + gate-composition table + pre-launch checklist; techContext.md (brew-vulns subprocess + sha2/hex deps + new "Vulnerability scanning" section); backendApi.md §13.15 (4 IPCs + module surface + 5 new wire types); frontendComponents.md v0.5.0 additions block (store + 5 component integrations + refresh-feed pattern); README outbound disclosure updated (path k); `docs/release-notes/0.5.0.md` (NEW); task record `tasks/2026-05/20-v0.5.0-vulnerability-scanning.md` (NEW).
+
+### Tests & lint at PR-open (post-smoke-test cycle)
+
+- `cargo test`: **585 passed**, 0 failed, 6 ignored (507 → 585, +78 new — the +6 over the original +72 is the captured-fixture suite from the smoke-test cycle)
+- `cargo build`: clean — zero dead-code warnings
+- `npm run check`: 0 errors, 3 pre-existing warnings (v0.4.0 baseline)
+- `npm run build`: clean
+
+### Smoke-test cycle (same day, post-docs commit)
+
+Five integration bugs surfaced + fixed during the first live run on the user's 326-package install. Each required either a real `brew` subprocess or the actual `brew vulns` binary — none catchable by unit-test sandbox. Full table + lessons in `tasks/2026-05/20-v0.5.0-vulnerability-scanning.md` § "Smoke test cycle". Summary:
+
+1. **`brew commands --include-aliases` errors without `--quiet`** (modern brew 5.x) — initial fix added the flag, then was superseded by #2.
+2. **`brew commands` doesn't list external `brew-FOO` formula shims** — wrong install probe entirely. brew-vulns ships as a formula at `$(brew --prefix)/bin/brew-vulns`; switched to `brew --prefix brew-vulns` (clean exit 0/1, no output parsing).
+3. **JSON severity is UPPERCASE** in wire (`"HIGH"`, `"MEDIUM"`, ...) — `#[serde(rename_all = "lowercase")]` does NOT case-fold on deserialize; ALL severities silently became `Unknown`. Custom `Deserialize` impl now case-folds and accepts `"MODERATE"` as a GHSA-flavored alias for `Medium`.
+4. **JSON uses `fixed_versions: [String]`** (array, often empty) — not `fixed_in: String`. Custom `first_string_or_none` deserializer maps the array's first element into the existing `fixed_in: Option<String>` field; `summary: null` now explicitly normalized to `""` via `string_or_null`.
+5. **`brew vulns --json` exits 1 when findings are present** (standard CI-scanner convention; exit 0 = clean, exit ≥ 2 = real error) — `run_brew_capture` rejected the JSON output. New private `run_vulns_capture` helper accepts exit 0 OR 1 as success, only typed-errors on ≥ 2.
+
+Regression-pinned by `vulns::client::tests::raw_scan_result_parses_real_brew_vulns_output` using a captured fixture from real `brew vulns --json` output (augeas + openjpeg + p11-kit). All five failure modes commented at their trap sites in `vulns/client.rs` so future maintainers see the why.
+
+**Lessons** (for the next subprocess-integration feature):
+
+- `#[serde(rename_all = "lowercase")]` controls serialization, NOT case-folding on deserialize. Custom impl when the wire format is upper-case.
+- `brew commands` only enumerates built-in + tap-resident subcommands; NOT external `brew-FOO` formula shims. Use `brew --prefix <formula>` for install detection.
+- CI-flavored scanners (brew vulns, trivy, grype, ...) use non-zero exit codes as a *signal channel*, not a failure indicator. Always check for stdout before treating non-zero as fatal.
+- A "defensive parse" without a captured fixture is just an aspiration — Step 2 declared `fixed_in?: String` and shipped; only the smoke test revealed the truth. **Capture the fixture early.**
+- Subprocess integration cannot be unit-tested into correctness. Live smoke testing with the real binary is the only way to catch process-semantics bugs (#1, #2, #5) AND validate schema assumptions (#3, #4).
+
+### Decisions locked
+
+- **Subprocess over native OSV client** — inherits upstream fixes; correct attribution ("Powered by brew vulns"); internal interface preserves the escape hatch if upstream stagnates.
+- **GHSA enrichment is best-effort** — UX nicety, not correctness requirement; soft-fail without toast keeps the scan reliable.
+- **SHA-256 over `DefaultHasher`** — deterministic across runs / machines / Rust versions; DefaultHasher's salt randomisation would silently invalidate the cached fingerprint on every launch.
+- **Opt-in** — adds an eleventh outbound path; first-launch posture preserved.
+- **Casks honestly excluded** — no fake clean state; the UI explicitly tells the user the coverage gap.
+
+### What's left
+
+- Open the PR for `feat/v0.5.0-vulnerability-scanning` → review → merge.
+- Cut the v0.5.0 release via the standard pipeline (same as v0.4.0).

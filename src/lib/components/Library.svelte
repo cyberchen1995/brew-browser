@@ -16,6 +16,7 @@
   import { discover } from "$lib/stores/discover.svelte";
   import { library, type LibraryFilter } from "$lib/stores/library.svelte";
   import { enrichment } from "$lib/stores/enrichment.svelte";
+  import { vulnerabilities } from "$lib/stores/vulnerabilities.svelte";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
   import type { Package } from "$lib/types";
 
@@ -25,6 +26,16 @@
   let query = $state("");
   let sortKey: SortKey = $state("name");
   let sortDir: SortDir = $state("asc");
+
+  // v0.5.0 — pill set is conditionally extended with "vulnerable" only
+  // when the feature is enabled. Adding it unconditionally would show a
+  // dead filter pill (always 0) to users who never opted in, which is
+  // worse than not surfacing it at all.
+  let libraryFilters = $derived<LibraryFilter[]>(
+    vulnerabilities.enabled
+      ? ["all", "formulae", "casks", "outdated", "vulnerable"]
+      : ["all", "formulae", "casks", "outdated"],
+  );
 
   // Library shares the Discover store's chip selection so jumping back-and-forth
   // between tabs keeps context. Categories load is idempotent.
@@ -36,6 +47,19 @@
       case "formulae": base = packages.formulae; break;
       case "casks":    base = packages.casks; break;
       case "outdated": base = packages.outdated; break;
+      case "vulnerable":
+        // v0.5.0 — packages with at least one known CVE. The pill is
+        // gated to only render when vuln scanning is enabled, but the
+        // filter itself stays defensive: if the user lands here with
+        // the feature off (e.g. via a stale dashboard link), base will
+        // be empty and the EmptyState kicks in cleanly.
+        base = vulnerabilities.enabled
+          ? packages.all.filter((p) => {
+              const rec = vulnerabilities.byPackage(p.kind, p.name);
+              return rec !== undefined && rec.vulns.length > 0;
+            })
+          : [];
+        break;
       default:         base = packages.all;
     }
     const q = query.trim().toLowerCase();
@@ -108,6 +132,11 @@
   function openDetail(p: Package) {
     ui.selectPackage(p.name, p.kind);
   }
+
+  async function refreshLibrary() {
+    await packages.load(true);
+    vulnerabilities.scanIfNeeded().catch(() => {});
+  }
 </script>
 
 <section class="library">
@@ -120,7 +149,7 @@
     <div class="head-right" data-tauri-drag-region="false">
       <Input bind:value={query} placeholder="Filter…" variant="search" size="sm" ariaLabel="Filter installed packages" />
       <span class="refresh-wrap">
-        <Button size="sm" variant="ghost" onclick={() => packages.load(true)} ariaLabel="Refresh" title="Refresh (⌘R)">
+        <Button size="sm" variant="ghost" onclick={refreshLibrary} ariaLabel="Refresh" title="Refresh (⌘R)">
           {#snippet icon()}<RefreshCw size={14} />{/snippet}
           Refresh
         </Button>
@@ -130,8 +159,12 @@
 
   <div class="filter-bar">
     <div class="pillgroup" role="tablist" aria-label="Type filter">
-      {#each (["all","formulae","casks","outdated"] as LibraryFilter[]) as f (f)}
-        {@const count = f === "outdated" ? packages.outdated.length : null}
+      {#each libraryFilters as f (f)}
+        {@const count = f === "outdated"
+          ? packages.outdated.length
+          : f === "vulnerable"
+            ? vulnerabilities.severityCounts.vulnerablePackages
+            : null}
         <button
           role="tab"
           aria-selected={library.filter === f}
@@ -140,7 +173,7 @@
         >
           {f === "all" ? "All" : f[0].toUpperCase() + f.slice(1)}
           {#if count !== null && count > 0}
-            <span class="filter-count">{count}</span>
+            <span class="filter-count" class:filter-count-danger={f === "vulnerable"}>{count}</span>
           {/if}
         </button>
       {/each}
@@ -300,6 +333,11 @@
     color: var(--color-text-inverse);
     font-size: 10px;
     font-weight: var(--fw-semibold);
+  }
+  /* v0.5.0 — danger-toned count for the Vulnerable pill so the
+     severity signal carries through even before the user clicks. */
+  .filter-count-danger {
+    background: var(--color-danger);
   }
 
   .chip-bar {

@@ -256,3 +256,45 @@ Net new components since the last inventory refresh (2026-05-23):
 - `entryFor`, `sparklineFor`, `velocityFor` — sync lookups over the cached index. Lazy lookup table rebuilt only when the index changes.
 - `seriesFor(name, kind)` — sync lookup over the cached per-package series.
 
+### v0.5.0 additions — Opt-in vulnerability scanning
+
+| Component | File | Props | State owned | Notes |
+|---|---|---|---|---|
+| `SettingsSectionVulnerabilities` | `SettingsSectionVulnerabilities.svelte` | (none — reads `settings` + `vulnerabilities` stores) | local: `installInFlight`, last-scan summary derived | Opt-in subsection for the `vulnerability_scanning_enabled` toggle. Mounted at the bottom of `SettingsSectionNetwork.svelte` alongside the existing Updates + Enhanced Trending History subsections. Single toggle disabled with "locked off" message when Offline Mode is on. When `brew vulns` isn't installed, surfaces an inline install affordance (button → `vulns_install_helper` IPC, captures stdout into the Activity drawer). Credit line + link to `https://github.com/Homebrew/homebrew-brew-vulns` makes the provenance loud ("Powered by brew vulns by Andrew Nesbitt"). Hint copy spells out the data practice in plain language: what's sent to OSV, what's sent to GitHub Advisories (only when GitHub auth is on), what isn't (no IP correlation since the subprocess speaks for itself; no telemetry to brew-browser infra). |
+
+**PackageRow integration** (`PackageRow.svelte`):
+- New severity dot rendered inline next to the installed pill. Color encodes max-severity from `vulnerabilities.byPackage` lookup (critical → red, high → orange, medium → amber, low → blue, unknown → grey). Hidden when the store has no entry for the package OR when the feature is off (the store's `enabled` getter gates the lookup).
+- Tooltip on hover: "N CVE(s) — click for details" routes the user to the PackageDetail Security card.
+- Zero-impact when the feature is off: `vulnerabilities.maxSeverityFor(kind, name)` returns `null` synchronously without any IPC hop, so the dot's `{#if}` branch elides cleanly.
+
+**PackageDetail integration** (`PackageDetail.svelte`):
+- New `Security` card section between the description and the AI-enriched blocks. Renders one row per CVE/GHSA with severity pill (Critical / High / Medium / Low / Unknown), advisory ID (linkified to GHSA or OSV when a `references[0]` URL exists), summary text, and "fixed in" range when present.
+- "Upgrade to fix" button wired to the existing `brew_upgrade` pipeline (single-package upgrade with live Activity-drawer stream). Visible only when the package is outdated AND at least one CVE has a `fixed_in` range — there's no point offering the action if the upgrade can't help.
+- "Check vulnerabilities" button triggers `vulnerabilities.scanOne(name)` for the current package; useful for cask-formula-pair edge cases and when the user wants to bypass the install-set cache for one package without the full Refresh.
+- For casks: the section renders the same shell but reads "Cask coverage isn't supported — `brew vulns` is formula-only" instead of a CVE list. Honest UX about the coverage gap; no fake clean state.
+- Strictly passive when the feature is off: the section simply doesn't exist (no "Enable in Settings" CTA, no banner). Matches the `trendingHistory` D4 pattern.
+
+**Dashboard integration** (`Dashboard.svelte`):
+- New `Exposure` card alongside the existing Updates / Composition / Categories cards. Renders severity counts as a horizontal bar (critical / high / medium / low / unknown) with a numeric total and a "Scan now" button (calls `vulnerabilities.scanAll(force=true)`).
+- Clean-state framing: when the scan completed and `vulnerablePackages === 0`, the card shows a ✓ checkmark with "No known vulnerabilities" rather than collapsing — the clean state IS the message.
+- Hidden when the feature is off (consistent with Personal Stats hiding when GitHub auth is off).
+- Reads from `vulnerabilities.severityCounts` derived getter (`$derived` rollup across the store's full Map); no per-render scan.
+
+**Sidebar integration** (`Sidebar.svelte`):
+- Count badge on the Library nav item: shows the number of vulnerable installed packages (`vulnerabilities.severityCounts.vulnerablePackages`). Max-severity tone (red for critical, orange for high, amber for medium, blue for low, grey for unknown).
+- Hidden when count is 0 OR feature is off — same "absence of badge is the clean state" pattern as the existing outdated / running-ops badges.
+
+**Refresh-feed integration** (cross-cutting):
+- The post-`brew update` refresh fan-out (Dashboard Refresh button, Library Refresh button) fires `vulnerabilities.scanAll(force=false)` after the catalog reload. The `force=false` parameter means the install-set fingerprint skip predicate still applies — a refresh that only ran `brew update` (without any install changes) won't re-shell `brew vulns`.
+- Post-mutation hooks (install / upgrade / uninstall in `packages.svelte.ts` action wrappers) call `vulnerabilities.invalidate(kind, name, version)` AND then `vulnerabilities.scanOne(name)` so the affected package's CVE row reflects the new state immediately.
+
+**New store** (`vulnerabilities.svelte.ts`, ~350 lines):
+- `byPackage: Map<string, VulnRecord>` — keyed by `"{kind}:{name}"` (no version — the store is the "what's vulnerable RIGHT NOW" view; versioning is the backend cache's concern).
+- `severityCounts: SeverityCounts` derived — `{ critical, high, medium, low, unknown, total, vulnerablePackages }` rolled up across the full Map. Bound directly by the Dashboard Exposure card and Sidebar badge.
+- `lastScanAt: Date | null`, `lastScanSource: "live" | "cache" | null`, `lastScanError: BrewErrorPayload | null` — surfaces for the Settings card and the optional debug strip.
+- `enabled` getter — single source of truth for "toggle on AND paranoid off." Same pattern as `trendingHistory.enabled`.
+- `scanAll(force?: boolean)`, `scanOne(name: string)`, `installHelper()`, `invalidate(kind, name, version)` — wraps the four IPCs.
+- `byPackage` / `maxSeverityFor(kind, name)` / `vulnsFor(kind, name)` — sync lookups for inline UI consumers (PackageRow, Sidebar, PackageDetail).
+- Error routing: `vulns_not_installed` → captured into `lastScanError` for the Settings card to render the install affordance (not a toast — the install button is the user-facing remediation). Everything else → `reportableToastError` so the user gets the "Report to brew-browser" action.
+- Reactivity: writes reassign `byPackage` (Svelte 5 doesn't track `Map.set()` mutations) — mirrors the `trendingHistory.seriesByKey` and `services.setPending` patterns already used elsewhere.
+

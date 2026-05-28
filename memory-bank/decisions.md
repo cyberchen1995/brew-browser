@@ -258,3 +258,65 @@ That means a net-new outbound path to infrastructure **we** operate (path j in t
 - **No per-feature gate; just rely on Offline Mode.** Master switch is too blunt — turning it off blocks the entire app. A per-feature toggle lets users keep brew search + GitHub auth working while declining the new endpoint specifically.
 
 **Outcome:** documented in `security.md` §16 (server-side audit), `projectbrief.md` "ten paths" (architectural enumeration), `README.md` "Open-source posture" (user-facing), and a new disclosure-list entry in `SettingsSectionNetwork.svelte` (in-app). Endpoint deployed via `tools/trending-collector/` running nightly cron on `brew-browser.zerologic.com`. Per-feature toggle lives in a new `SettingsSectionTrendingHistory.svelte` mounted at the bottom of Network alongside the existing Updates subsection.
+
+---
+
+## 2026-05-27: Opt-in vulnerability scanning via `brew vulns` (v0.5.0)
+
+**Context:** users want to know which of their installed formulae have known CVEs. Two integration shapes were on the table:
+
+1. **Native Rust client** — implement OSV.dev queries directly. We'd extract source URLs from `brew info`, build the OSV GIT-ecosystem query payload, post to `api.osv.dev/v1/query`, parse the response, render. Full control; full ownership of correctness; full ownership of regression risk every time OSV's schema or brew's formula format shifts.
+2. **Shell out to `brew vulns`** — Homebrew's own subcommand (`Homebrew/homebrew-brew-vulns`, by Andrew Nesbitt, published January 2026) already does the source-URL extraction, version-tag matching, and GIT-ecosystem query. It's published by Homebrew, designed for this exact use case, and inherits upstream fixes automatically.
+
+The v0.4.0 outbound enumeration is at ten paths (path j is the most recent — opt-in `brew-browser.zerologic.com/trending-history`). v0.5.0 adds an eleventh: the OSV traffic that `brew vulns` performs, plus an optional GHSA enrichment to `api.github.com/advisories/{GHSA_ID}` from our own Rust code when both feature toggles align.
+
+**Decision:** shell out to `brew vulns` for the OSV query; add **best-effort** GHSA enrichment from our Rust code; ship the whole feature as **opt-in** behind `Settings.vulnerability_scanning_enabled` (default `false`). Persist a SHA-256 fingerprint of the install set so opening the app daily doesn't re-shell `brew vulns` (60+ seconds with 200 packages) when nothing has changed.
+
+**Architecture:**
+
+- **Subprocess boundary:** the brew-browser binary itself never opens a socket to `api.osv.dev` or the source forges. `brew vulns` does, as the subprocess we invoke. This keeps the trust boundary honest in three places (user-facing copy, security.md §17 audit, and the in-app disclosure list): "we shell out to the official Homebrew subcommand; here is what it talks to."
+- **Powered by brew vulns:** the Settings card credits `Homebrew/homebrew-brew-vulns` and links to the upstream repo. This is both correct attribution and an escape valve — if brew-vulns stagnates we swap in a native Rust client behind the same internal interface (`vulns::client::{check_brew_vulns_installed, scan_all, scan_one}`) without churning the IPC surface or the cache shape.
+- **One-click installer:** a new `vulns_install_helper` IPC runs `brew install homebrew/brew-vulns/brew-vulns`. Gated only by `require_network` (NOT `require_vulnerability_scanning`) because the typical first-run flow is "user wants to enable scanning → tap install affordance → flip the toggle on → scan." Refusing to install the prerequisite until the feature is already on would be backwards.
+- **GHSA enrichment is best-effort:** OSV returns a vulnerability ID, a brief summary, and an affected-versions range. GHSA returns the same plus richer prose, patched-version ranges, and reference links. We fetch GHSA when the OSV record carries a `GHSA-…` ID **and** `settings.github_enabled` is on. A 403 / 429 / network error leaves the OSV record unchanged and logs (no toast). The scan never fails because the enrichment cherry-on-top failed. This is triple-defense: paranoid gate, then per-feature vuln-scanning gate, then per-feature GitHub gate inside `vulns::enrich::enrich()`.
+- **Install-set fingerprint:** SHA-256 (via the new `sha2` + `hex` deps) over sorted `kind:name:version` lines, persisted into the cache file alongside the per-package entries. Daily app opens with no install changes serve the cached report instantly with `source: "cache"`. The `force=true` parameter on `vulns_scan_all` bypasses the skip predicate for the Refresh button. **Why not `DefaultHasher`?** Rust's `DefaultHasher` is intentionally non-deterministic across process runs — its salt is randomized to defeat HashDoS — so a hash recorded in v0.5.0 disk cache would mismatch every subsequent launch, silently invalidating the skip predicate. SHA-256 is deterministic across runs, across machines, and across Rust versions.
+- **Persistent on-disk cache:** `~/Library/Application Support/brew-browser/vulns_cache.json` for the scan records (1 MiB cap, atomic write, 6h TTL per record, fail-soft on corrupt + future-schema). Parallel `ghsa_cache.json` for enrichment (2 MiB cap, same atomic-write + read-capped pattern). Both load lazily on the first scan to avoid paying the file-read cost when the user never opts in.
+- **Refresh integration:** the post-`brew update` refresh fan-out (Dashboard Refresh, Library Refresh) fires `vulnerabilities.scanAll(force=false)` after the catalog reload so freshly learned upstream versions get scanned. Post-mutation hooks (install / upgrade / uninstall) call `vulns_invalidate(kind, name, version)` to drop the affected cache entry and trigger a per-package re-scan.
+- **Casks are out of scope:** `brew vulns` is formula-only (casks ship pre-compiled vendor binaries with their own update channels; OSV's source-URL approach doesn't map). Cask packages render the same UI rows but the Security card label honestly says "Cask coverage isn't supported — `brew vulns` is formula-only." This is the same posture we take with cask icons (Discover renders the same rows; the icon source label tells you when there's nothing to show).
+
+**Alternatives rejected:**
+
+- **Native Rust OSV client.** Tempting for tight integration, but we'd own every change to OSV's schema, every change to brew's source-URL format, every release that adds a new source-forge host. brew-vulns owns those already and is published by the project we wrap. Shelling out is the same architectural posture as every other brew interaction in this app.
+- **Always-on (no per-feature toggle).** Would break the "no surprise calls" posture — `brew vulns` reaches `api.osv.dev` and the source forges (which is fine, but it's a non-Homebrew network surface the user didn't ask for). Even though Offline Mode would still kill it via `require_network`, the per-feature toggle gives users a way to keep brew + catalog + GitHub on while declining OSV traffic specifically.
+- **Toast on GHSA enrichment failure.** Rejected. The enrichment is a UX nicety, not a correctness requirement. Surfacing transient GitHub rate-limit toasts would train users to dismiss notifications about the more serious gates (paranoid mode, settings corruption) — better to log and move on.
+- **In-memory-only cache (no disk persistence).** Re-scanning 200 packages takes 60+ seconds. Without disk persistence, that cost is paid on every app launch, every time. The 1 MiB cap + atomic-write + fail-soft load make on-disk caching strictly better here.
+- **Single cache file for both scan records and GHSA enrichment.** Schema-coupling them means one file's corrupt-recovery path resets the other. Keeping them separate (`vulns_cache.json`, `ghsa_cache.json`) lets each fail soft independently and lets us tune the caps separately (1 MiB vs 2 MiB).
+
+**Outcome:** documented in `security.md` §17 (endpoint audit), `projectbrief.md` "eleven paths" (architectural enumeration), `README.md` "Open-source posture" (user-facing), `techContext.md` (subprocess + dep additions), `backendApi.md` §13.15 (IPC surface), `frontendComponents.md` v0.5.0 additions (store + components), and `docs/release-notes/0.5.0.md`. Feature ships behind a new `SettingsSectionVulnerabilities.svelte` mounted in `SettingsSectionNetwork.svelte` alongside the Updates and Enhanced Trending History subsections. UI surface lands in the Dashboard "Exposure" card, the Sidebar count badge, the PackageRow severity dot, and the PackageDetail "Security" card.
+
+## 2026-05-27: Smoke-test discipline for subprocess-integration features
+
+**Status:** durable rule, added after the v0.5.0 smoke-test cycle surfaced five integration bugs no unit test could have caught.
+
+**Context:** v0.5.0 (above) shelled out to `brew vulns` — a third-party subprocess we don't control. Step 2 declared a "defensive" wire shape with `#[serde(default)]` everywhere and shipped 40+ unit tests against synthetic fixtures. The build passed every gate (cargo test, npm check, vite build). The first time the user actually clicked "Scan now" on their real install, **five separate bugs** surfaced in rapid succession — each invisible to the test suite by construction:
+
+1. CLI flag combination requirement (`--include-aliases` needs `--quiet` in brew 5.x)
+2. Wrong install-detection probe (`brew commands` doesn't list external `brew-FOO` formula shims)
+3. Wire severity is UPPERCASE; `#[serde(rename_all = "lowercase")]` doesn't case-fold on deserialize
+4. Wire field is `fixed_versions: [String]`, not `fixed_in: String` — the speculative shape was wrong
+5. Subprocess uses non-zero exit as a *signal channel* (exit 1 = "findings present"), not a failure indicator
+
+**Decision:** for any feature that depends on a third-party subprocess or external API we don't own:
+
+1. **Capture a real fixture before declaring done.** Run the actual tool once, save its output verbatim, write a parse test that consumes that fixture. The fixture is the canonical regression pin — keep it in tree even when the shape "looks stable."
+2. **Document process-semantics assumptions at the trap site.** If a subprocess uses non-zero exit codes for signal (CI scanners, diff tools, grep), comment the exit-code table in the wrapper so a future maintainer doesn't "fix" it back to a stricter helper. Same for any non-obvious CLI flag requirements.
+3. **Treat "defensive parsing" as a starting hypothesis, not a finished posture.** `#[serde(default)]` only helps when the field names are right. Wrong field names + defaults = silent data loss.
+4. **Smoke-test on the real binary before declaring the build complete.** Unit tests in a sandbox validate *internal* correctness; only live smoke tests catch the *integration* assumptions. If the feature touches a subprocess, the build isn't done until someone has clicked the button and watched the data flow end-to-end.
+5. **Distinguish `#[serde(rename_all = "lowercase")]` (serialization control) from case-folding deserialization (custom impl).** They are NOT the same. The default derived `Deserialize` is case-sensitive.
+
+**Rejected alternatives:**
+
+- "We'll catch it in code review." Reviewers don't run the binary either. The Step 2 review approved the speculative shape because it matched the declared brief — nobody had real output to compare against.
+- "We'll catch it in CI integration tests." No CI runner installs every third-party subprocess our app might shell out to. brew-vulns specifically is a brew formula install — unrealistic to provision in GitHub Actions just to exercise our wrapper.
+- "Mock the subprocess with a recorded fixture." Useful, but only after the fixture has been captured live at least once. The mock-first failure mode is "mock matches expectations; reality differs."
+
+**Outcome:** added the §"Smoke test cycle" block to `tasks/2026-05/20-v0.5.0-vulnerability-scanning.md` documenting the five bugs + their fixes + the captured-fixture regression pin. Future subprocess-integration tasks (e.g. if we ever wrap `brew livecheck`, `brew bundle-doctor`, or any other third-party brew subcommand) should reference this ADR before committing to a "defensive parse" without a captured fixture.

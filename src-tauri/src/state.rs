@@ -28,6 +28,7 @@ use crate::error::BrewError;
 use crate::trending::cache::TrendingCache;
 use crate::trending::history::cache::TrendingHistoryCache;
 use crate::types::{BrewEnvironment, PackageList};
+use crate::vulns::cache::VulnsCache;
 
 /// Per-job handle stored in `AppState.jobs`. The streaming task holds
 /// the actual `Child`; this struct holds enough to identify and cancel it.
@@ -71,6 +72,14 @@ pub struct AppState {
     /// different (project infra vs. Homebrew first-party) and the TTL
     /// is longer (6h vs. 1h default).
     pub trending_history_cache: Arc<Mutex<TrendingHistoryCache>>,
+
+    /// v0.5.0 — opt-in vulnerability-scan cache for `brew vulns`
+    /// output. Persisted to `<app_data_dir>/vulns_cache.json` so the
+    /// install-set fingerprint survives across app launches and we
+    /// don't re-shell out to brew-vulns on every startup when nothing
+    /// has changed. Loaded lazily on first scan (avoids paying the
+    /// disk-read cost when the user never opts in).
+    pub vulns_cache: Arc<Mutex<VulnsCache>>,
 
     /// Resolved app-data directory for Brewfiles.
     pub brewfiles_dir: PathBuf,
@@ -213,6 +222,10 @@ impl AppState {
             jobs: Arc::new(Mutex::new(HashMap::new())),
             trending_cache: Arc::new(Mutex::new(TrendingCache::default())),
             trending_history_cache: Arc::new(Mutex::new(TrendingHistoryCache::default())),
+            // v0.5.0 — start with an empty cache; the IPC layer hydrates
+            // from disk on first opt-in scan (lazy load avoids paying the
+            // file-read cost when the user never enables the feature).
+            vulns_cache: Arc::new(Mutex::new(VulnsCache::new_empty())),
             brewfiles_dir,
             cache_dir,
             app_data_dir,
@@ -316,6 +329,36 @@ impl AppState {
             SettingsLoadState::Loaded(s) if s.enhanced_trending_enabled => Ok(()),
             _ => Err(BrewError::FeatureDisabled {
                 feature: "trending_history".to_string(),
+            }),
+        }
+    }
+
+    /// v0.5.0 — composed gate for the vulnerability-scanning surface
+    /// (`brew vulns` subprocess + OSV roundtrip + optional GHSA enrich).
+    /// Composes the master paranoid switch with the per-feature
+    /// `vulnerability_scanning_enabled` toggle. Used by
+    /// [`crate::commands::vulns::*`] before any subprocess spawn or
+    /// network call.
+    ///
+    /// Returns:
+    /// - `Ok(())` if paranoid is OFF **and** `vulnerability_scanning_enabled`
+    ///   is `true`.
+    /// - `Err(ParanoidModeBlocked { feature })` if paranoid would deny
+    ///   `require_network` (master switch wins; the per-feature toggle
+    ///   is irrelevant when paranoid is on).
+    /// - `Err(FeatureDisabled { feature })` if paranoid allows but the
+    ///   per-feature toggle is off (or `FirstLaunch` — fresh-install
+    ///   posture is opt-in only).
+    ///
+    /// Fail-closed on `Corrupt` is handled by the inner `require_network`
+    /// call — `Corrupt` always denies first with `ParanoidModeBlocked`.
+    pub async fn require_vulnerability_scanning(&self) -> Result<(), BrewError> {
+        self.require_network("vulnerability_scanning").await?;
+        let guard = self.settings.read().await;
+        match &*guard {
+            SettingsLoadState::Loaded(s) if s.vulnerability_scanning_enabled => Ok(()),
+            _ => Err(BrewError::FeatureDisabled {
+                feature: "vulnerability_scanning".to_string(),
             }),
         }
     }
@@ -551,6 +594,87 @@ mod tests {
         match state.require_enhanced_trending().await {
             Err(BrewError::ParanoidModeBlocked { feature }) => {
                 assert_eq!(feature, "trending_history");
+            }
+            other => panic!("expected ParanoidModeBlocked from corrupt, got {other:?}"),
+        }
+    }
+
+    // ---------- v0.5.0: require_vulnerability_scanning ----------
+
+    #[tokio::test]
+    async fn require_vulnerability_scanning_allows_when_toggle_on_and_paranoid_off() {
+        let s = Settings {
+            paranoid_mode: false,
+            vulnerability_scanning_enabled: true,
+            ..Settings::default()
+        };
+        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
+        assert!(state.require_vulnerability_scanning().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn require_vulnerability_scanning_blocks_when_toggle_off() {
+        // Toggle off → FeatureDisabled (NOT ParanoidModeBlocked — the
+        // cure is a different setting toggle).
+        let s = Settings {
+            paranoid_mode: false,
+            vulnerability_scanning_enabled: false,
+            ..Settings::default()
+        };
+        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
+        match state.require_vulnerability_scanning().await {
+            Err(BrewError::FeatureDisabled { feature }) => {
+                assert_eq!(feature, "vulnerability_scanning");
+            }
+            other => panic!("expected FeatureDisabled, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn require_vulnerability_scanning_blocks_when_paranoid_on_even_if_toggle_on() {
+        // Master switch wins. Frontend should route to Offline Mode
+        // toggle, not the per-feature toggle.
+        let s = Settings {
+            paranoid_mode: true,
+            vulnerability_scanning_enabled: true,
+            ..Settings::default()
+        };
+        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
+        match state.require_vulnerability_scanning().await {
+            Err(BrewError::ParanoidModeBlocked { feature }) => {
+                assert_eq!(feature, "vulnerability_scanning");
+            }
+            other => panic!("expected ParanoidModeBlocked, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn require_vulnerability_scanning_blocks_on_first_launch() {
+        // FirstLaunch → require_network allows but the per-feature
+        // toggle defaults to false → FeatureDisabled. Critical for
+        // first-install posture: zero `brew vulns` invocations and zero
+        // OSV traffic until opt-in.
+        let state = build_state_with(SettingsLoadState::FirstLaunch).await;
+        match state.require_vulnerability_scanning().await {
+            Err(BrewError::FeatureDisabled { feature }) => {
+                assert_eq!(feature, "vulnerability_scanning");
+            }
+            other => panic!("expected FeatureDisabled, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn require_vulnerability_scanning_blocks_when_corrupt() {
+        // Corrupt → paranoid gate fires first with ParanoidModeBlocked,
+        // same as every other composed gate. Keeps the toast routing
+        // uniform across features.
+        let state = build_state_with(SettingsLoadState::Corrupt {
+            message: "boom".into(),
+        })
+        .await;
+        match state.require_vulnerability_scanning().await {
+            Err(BrewError::ParanoidModeBlocked { feature }) => {
+                assert_eq!(feature, "vulnerability_scanning");
             }
             other => panic!("expected ParanoidModeBlocked from corrupt, got {other:?}"),
         }

@@ -1297,3 +1297,71 @@ All three are `skip_serializing_if = "Option::is_none"` so the wire shape stays 
 - URL builder rejects `../`, `/`, ` `, `;` — exhaustively tested
 - Velocity returns `None` for degenerate / too-small / non-monotonic inputs
 
+### 13.15 v0.5.0 — Opt-in vulnerability scanning
+
+**Settings:** new `vulnerability_scanning_enabled: bool` field on the `Settings` struct (`src-tauri/src/commands/settings.rs:163`). `#[serde(default)]`, defaults `false` in `Settings::default()`. Forward-compat tested: a v0.4.x `settings.json` missing this field reads cleanly as `false`. Distinct from `enhanced_trending_enabled` and `github_enabled` — each opt-in surface has its own toggle so users can grant consent at the right granularity.
+
+**New gate:** `AppState::require_vulnerability_scanning()` (`src-tauri/src/state.rs:355`) composes the master `require_network` gate with the per-feature toggle. Returns:
+
+- `Ok(())` when paranoid OFF and `vulnerability_scanning_enabled == true`
+- `Err(FeatureDisabled { feature: "vulnerability_scanning" })` when paranoid OFF but toggle OFF (also returned for `FirstLaunch`)
+- `Err(ParanoidModeBlocked { feature: "vulnerability_scanning" })` when paranoid ON regardless of toggle, AND when settings are `Corrupt` (inner gate fires)
+
+Five rejection paths pinned by tests at `src-tauri/src/state.rs:602-680`.
+
+**New error variant:** `BrewError::VulnsNotInstalled { install_command: String }` (`src-tauri/src/error.rs:172`). Returned by `vulns_scan_all` / `vulns_scan_one` when the `brew vulns` subcommand is not installed. The frontend surfaces an install affordance instead of a toast — the user-facing remediation is the one-click installer, not a transient notice.
+
+**New module:** `src-tauri/src/vulns/` (4 files, ~2,100 lines + the IPC handler):
+
+- `mod.rs` — module header + re-exports.
+- `client.rs` (~580 lines) — `check_brew_vulns_installed`, `scan_all`, `scan_one`, `install_brew_vulns`, `validate_formula_name`, `looks_like_subcommand_missing` helper, private `run_vulns_capture` (tolerant subprocess wrapper). Defines `Severity` enum (custom case-folding `Deserialize`), `RawVuln`, `RawScanResult`, plus deserialize helpers `string_or_null` + `first_string_or_none` for wire-shape normalization. `BREW_VULNS_INSTALL_CMD` constant pinned at `"brew install homebrew/brew-vulns/brew-vulns"`. All subprocess invocations go through `tokio::process::Command::new(brew).args(["vulns", ...])` — argv-safe + validator-checked.
+
+  Two subprocess-integration subtleties that warrant calling out (pinned by tests + comments at the trap sites):
+
+  1. **`check_brew_vulns_installed` uses `brew --prefix brew-vulns`**, NOT `brew commands --include-aliases`. brew-vulns ships as a regular formula whose `bin/brew-vulns` shim becomes a `brew vulns` external subcommand via brew's PATH-based dispatch — and `brew commands` does NOT enumerate external `brew-FOO` binaries from installed formulae. `brew --prefix <formula>` exits 0 with the prefix path when present, exit 1 with "No available formula" when not — clean status-code-only probe, no output parsing.
+  2. **`scan_all` / `scan_one` use the private `run_vulns_capture` helper**, NOT `run_brew_capture`. brew-vulns follows the standard CI-scanner convention: exit 0 means "scan succeeded, no findings", exit 1 means "scan succeeded, findings present", exit ≥ 2 is a real error. `run_brew_capture` rejects every non-zero exit as `BrewExitNonZero` — which would throw away the JSON output on every install that actually has vulnerabilities (the common case). `run_vulns_capture` accepts both 0 and 1 and only typed-errors on ≥ 2.
+- `cache.rs` (~550 lines) — `VulnsCache` with per-package TTL (`VULNS_CACHE_TTL = 6 hours`) and install-set fingerprint slot. `MAX_VULNS_CACHE_BYTES = 1 MiB` cap on both load and save. `VulnKey { kind, name, version }` newtype with `to_storage_key` / `parse` for the `"formula:name:version"` storage form. `get_fresh` honours TTL; `get_any` returns even stale; `put` / `invalidate` / `record_fingerprint` / `should_skip_full_scan` round out the surface. Atomic-write via the shared helper; fail-soft on corrupt + future-schema.
+- `fingerprint.rs` (~150 lines) — `compute(installed: &[InstalledRef]) -> String`. Sorts the input by `(kind, name, version)`, builds canonical `kind:name:version` lines, hashes the joined bytes with SHA-256, returns lowercase hex. Deterministic across runs / machines / Rust versions (DefaultHasher's salt randomisation would silently invalidate the cached fingerprint on every launch).
+- `enrich.rs` (~900 lines) — `GhsaCache` parallel to `VulnsCache` (`MAX_GHSA_CACHE_BYTES = 2 MiB`), `GhsaAdvisory` wire shape, `cache_path()`, and the `enrich(state, vulns)` async fn. Iterates GHSA-prefixed IDs in the input slice, consults the cache first, fetches missing IDs from `api.github.com/advisories/{GHSA_ID}` (only when `settings.github_enabled` is on — triple-defense after the outer gates), best-effort on 403 / 429 / network error (logs, leaves the OSV record unchanged).
+
+**New AppState field:** `vulns_cache: Arc<Mutex<VulnsCache>>` + `ghsa_cache: Arc<Mutex<GhsaCache>>`. Hydrated lazily on the first scan via `ensure_cache_hydrated` — avoids paying the file-read cost when the user never opts in.
+
+**New IPCs (4):**
+
+| Command | Signature | Purpose | `require_vulnerability_scanning` | `require_network` | File |
+|---|---|---|---|---|---|
+| `vulns_scan_all` | `async fn vulns_scan_all(state, force: bool) -> Result<VulnScanReport, BrewError>` | Full-install-set scan. `force=false` returns the cached report when the install-set fingerprint matches; `force=true` (Refresh button) always re-shells. Per-package GHSA enrichment is best-effort. Writes results + fingerprint back to the cache + persists. | **yes** | (composed into the gate above) | `commands/vulns.rs:177` |
+| `vulns_scan_one` | `async fn vulns_scan_one(state, name: String) -> Result<Vec<RawVuln>, BrewError>` | Single-formula scan, used by PackageDetail "Check vulnerabilities". `validate_formula_name` gates the input. Caches when the installed version is resolvable from `installed_cache`; otherwise returns live without caching (cache entry needs a version for the key). | **yes** | (composed) | `commands/vulns.rs:263` |
+| `vulns_install_helper` | `async fn vulns_install_helper(state) -> Result<String, BrewError>` | One-click installer for the `brew vulns` subcommand. Runs `brew install homebrew/brew-vulns/brew-vulns` under the write lock. Returns captured stdout for Activity-drawer surfacing. **Gated only by `require_network`** — the per-feature toggle is intentionally bypassed (first-run flow is "install → toggle on → scan"). | no (intentional) | **yes** ("vulns_install") | `commands/vulns.rs:317` |
+| `vulns_invalidate` | `async fn vulns_invalidate(state, kind, name, version) -> Result<(), BrewError>` | Drop a single cache entry by `VulnKey`. Called by post-install / post-upgrade / post-uninstall hooks so a CVE record for a version the user no longer has can't outlive its referent. **Ungated** — cleanup after state changes is always safe, and removing data is never a privacy concern. | no | no | `commands/vulns.rs:346` |
+
+**New wire types** (`src-tauri/src/commands/vulns.rs:57-79` + `src-tauri/src/vulns/{client,cache,enrich}.rs`):
+
+- `VulnScanReport { entries: HashMap<String, ScanRecord>, scanned_at: DateTime<Utc>, source: String, install_fingerprint: String }` — the `vulns_scan_all` response. `source` is `"live"` for a fresh subprocess invocation, `"cache"` for the fingerprint-skip path. `entries` is keyed by `"formula:name:version"` so the frontend's `(kind, name, version)` lookup stays O(1).
+- `ScanRecord { vulns: Vec<RawVuln>, scanned_at: DateTime<Utc> }` — per-package cache entry.
+- `VulnKey { kind: PackageKind, name: String, version: String }` — the cache key. Casks are accepted in the type but produce empty results (brew-vulns is formula-only).
+- `RawVuln { id: String, severity: Severity, summary: String, details: String, references: Vec<String>, fixed_in: Option<String>, published: Option<String> }` — canonical in-app shape. The wire format from `brew vulns --json` uses snake_case + nullable `summary` + `fixed_versions: [String]` (array, often empty); we normalize at the parse boundary:
+  - `summary: null` → `""` via the `string_or_null` deserializer
+  - `fixed_versions: ["3.2.1", ...]` → `fixed_in: Some("3.2.1")` (first element wins — earliest patch) via the `first_string_or_none` deserializer (also accepts a bare string for forward-compat)
+  - `aliases`, `tag`, `repo_url` and other extras from the wire are ignored harmlessly via `#[serde(default)]`
+  - Shape regression-pinned by `vulns::client::tests::raw_scan_result_parses_real_brew_vulns_output` using a captured fixture from real `brew vulns --json` output
+- `Severity { Critical, High, Medium, Low, Unknown }` — custom case-folding `Deserialize` accepts UPPERCASE (real brew-vulns wire format), lowercase (the convention elsewhere in the codebase), and `"MODERATE"` as a GHSA-flavored alias for `Medium`. Unknown / missing values fall back to `Unknown` so a brew-vulns release that adds a new severity label doesn't break us. **The default `#[serde(rename_all = "lowercase")]` does NOT case-fold on deserialize — this is a custom impl, not the derived one.**
+- `GhsaAdvisory { ghsa_id, summary, description?, severity, html_url?, references }` — best-effort enrichment payload.
+
+**Subprocess safety:** every formula name passed to `brew vulns` (whether from `vulns_scan_one` or derived from the install set in `vulns_scan_all`) runs through `validate_formula_name` against `^[a-z0-9._@+-]+$`. Defense-in-depth — `Command::new + .arg()` is already argv-safe, but the validator mirrors the same pattern used for `services_list` (§13.3) and `validate_cask_token` (§13.7) so the surface stays uniform.
+
+**Tests:** +72 backend tests across the four-module set (cache: 14, client: 16, fingerprint: 8, enrich: 12, commands/vulns: 1 gate test, state: 5 `require_vulnerability_scanning_*` tests, settings: forward-compat + camelCase round-trip, error: VulnsNotInstalled serialization). Backend total moves from 507 → 579+.
+
+Critical invariants pinned:
+
+- Toggle off → `FeatureDisabled` (not `ParanoidModeBlocked`) — frontend routes correctly to the per-feature card, not Offline Mode
+- Paranoid on, toggle on → `ParanoidModeBlocked` — master switch wins
+- FirstLaunch → `FeatureDisabled` — no OSV traffic until explicit opt-in
+- Corrupt settings → `ParanoidModeBlocked` (fail-closed via inner gate)
+- `vulns_install_helper` only checks `require_network`, not the per-feature toggle
+- `validate_formula_name` rejects shell metas, empties, oversize input
+- `VULNS_CACHE_TTL` is 6 hours (`cache_ttl_is_six_hours` test)
+- Cache corrupt → empty cache returned, no panic
+- GHSA enrichment soft-fails when `github_enabled` is off
+- Install-set fingerprint is deterministic across runs (sorted input → stable hash)
+

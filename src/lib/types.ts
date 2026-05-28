@@ -568,6 +568,14 @@ export interface Settings {
       charts. Off by default — distinct trust boundary from the always-on
       formulae.brew.sh paths. Suppressed by Offline Mode regardless. */
   enhancedTrendingEnabled: boolean;
+  /** v0.5.0 — when true, the backend shells out to the official
+      `brew vulns --json` subcommand to surface CVEs against installed
+      formulae (OSV.dev via the GIT ecosystem). When `githubEnabled` is
+      also on, GHSA-prefixed results are enriched via api.github.com.
+      Off by default — distinct trust boundary (OSV is operated by
+      Google, separate from formulae.brew.sh). Suppressed by Offline
+      Mode regardless. */
+  vulnerabilityScanningEnabled: boolean;
 }
 
 /** Defaults matching the Rust `Settings::default()`. Used when seeding
@@ -591,7 +599,86 @@ export const SETTINGS_DEFAULTS: Settings = {
   // v0.4.0 — opt-in enhanced trending history. Off by default; new
   // trust boundary (project infra vs. Homebrew first-party).
   enhancedTrendingEnabled: false,
+  // v0.5.0 — opt-in vulnerability scanning via `brew vulns`. Off by
+  // default; new trust boundary (OSV.dev + GHSA).
+  vulnerabilityScanningEnabled: false,
 };
+
+// =========================================================
+// 2.10.1 Vulnerability scanning (v0.5.0)
+// =========================================================
+
+/**
+ * Severity label as reported by `brew vulns` (OSV-derived). The
+ * backend `#[serde(other)]` catch-all maps any unrecognized value to
+ * `"unknown"` so a future OSV addition or brew-vulns formatting change
+ * never silently drops an entry.
+ *
+ * Wire shape is lowercase (matches the Rust `Severity` enum's
+ * `#[serde(rename_all = "lowercase")]`).
+ */
+export type Severity = "critical" | "high" | "medium" | "low" | "unknown";
+
+/**
+ * One vulnerability entry produced by `brew vulns --json` (optionally
+ * enriched by the backend's GHSA layer when `githubEnabled` is on).
+ *
+ * Every field is defensively populated by the backend — `id` is `""`
+ * when the upstream advisory has no canonical identifier, `references`
+ * is `[]` when none were published, etc. The UI should treat empties
+ * as "not available" rather than rendering placeholder strings.
+ */
+export interface RawVuln {
+  /** CVE or GHSA identifier (e.g. `CVE-2024-1234`, `GHSA-xxxx-xxxx-xxxx`).
+      Empty when the upstream entry has no canonical ID. */
+  id: string;
+  severity: Severity;
+  /** One-line title. Suitable for toasts and list rows. */
+  summary: string;
+  /** Multi-line body. May be markdown — render with the same sanitizer
+      the PackageDetail enrichment text uses. */
+  details: string;
+  /** Patched version range (or single version), when known. When
+      non-null the UI can offer a one-click upgrade affordance. */
+  fixedIn: string | null;
+  /** External references — typically advisory URL + upstream commit. */
+  references: string[];
+  /** ISO-8601 publish date when the advisory was first published.
+      Null for very new or backfilled entries. */
+  published: string | null;
+}
+
+/**
+ * One scan record for a single installed `(kind, name, version)`. An
+ * empty `vulns` vec is a positive "clean at this version" signal,
+ * distinct from "no record exists at all".
+ *
+ * Backend wire shape mirrors the Rust `ScanRecord` struct
+ * (`#[serde(rename_all = "camelCase")]`).
+ */
+export interface ScanRecord {
+  /** ISO-8601 timestamp the record was produced by `brew vulns`. */
+  scannedAt: string;
+  vulns: RawVuln[];
+}
+
+/**
+ * Full-install-set scan report returned by `vulns_scan_all`. `entries`
+ * is keyed by the backend's storage-key form `"{kind}:{name}:{version}"`
+ * — frontend consumers should treat that as opaque and re-key on
+ * `(kind, name)` if they need version-agnostic lookup (the frontend
+ * store does this via `parseKey`).
+ *
+ * `source === "cache"` means the install-set fingerprint matched the
+ * last successful scan and the backend served the previous report
+ * without re-shelling `brew vulns`. `"live"` means a fresh scan ran.
+ */
+export interface VulnScanReport {
+  entries: Record<string, ScanRecord>;
+  scannedAt: string;
+  source: "live" | "cache";
+  installFingerprint: string;
+}
 
 // =========================================================
 // 2.11 GitHub (Phase 12c + 12e)
@@ -756,7 +843,8 @@ export type BrewErrorPayload =
   | { code: "scope_required"; scope: string }
   | { code: "hash_mismatch"; expected: string; actual: string }
   | { code: "signature_verification_failed"; message: string }
-  | { code: "downgrade_rejected"; current: string; target: string };
+  | { code: "downgrade_rejected"; current: string; target: string }
+  | { code: "vulns_not_installed"; installCommand: string };
 
 /** Type-narrowing helper: is the thrown value a BrewErrorPayload? */
 export function isBrewError(e: unknown): e is BrewErrorPayload {
@@ -802,6 +890,8 @@ export function brewErrorMessage(e: BrewErrorPayload): string {
       return `Update aborted: signature verification failed (${e.message}).`;
     case "downgrade_rejected":
       return `Update refused: ${e.target} is not newer than the installed version (${e.current}).`;
+    case "vulns_not_installed":
+      return `brew vulns subcommand not installed. Click 'Install brew-vulns' or run \`${e.installCommand}\` to enable scanning.`;
   }
 }
 

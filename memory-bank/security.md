@@ -791,3 +791,117 @@ The endpoint adds **one** new trust boundary (path j in the enumeration). The bo
 - [ ] Tail of `/var/log/caddy/brew-trending.log` shows `"remote_ip":"0.0.0.0"` for the test request above
 - [ ] `tools/trending-collector/seed.js` run once and `index.json` lands at the URL with non-empty `packages`
 - [ ] Frontend with `enhancedTrendingEnabled = true` renders inline sparklines on the Trending tab
+
+---
+
+## 17. v0.5.0 — Vulnerability scanning endpoint audit
+
+**Date:** 2026-05-27
+**Scope:** the opt-in vulnerability-scanning surface added in v0.5.0 (paths k1–k4 in the projectbrief outbound enumeration). Establishes the trust boundary for the `brew vulns` subprocess + GHSA enrichment and proves the gate composition for the per-feature toggle.
+
+### 17.1 Why this gets its own section
+
+Paths a–j in the projectbrief enumeration originate from the brew-browser binary itself — every outbound socket is opened by our Rust code (or by the user's default browser via `open(1)`). Path **k** is different: the OSV traffic is opened by the `brew vulns` subprocess we shell out to, not by us directly. The GHSA enrichment IS our code, but it's the first time we route a request to `api.github.com/advisories/{GHSA_ID}` — distinct from the existing repo-stats / OAuth / authed-actions paths under `api.github.com`. Both deserve explicit documentation.
+
+### 17.2 New outbound paths
+
+| Path | Originator | Trigger | Per-feature gate | Master gate |
+|---|---|---|---|---|
+| `api.osv.dev` (POST queries to `/v1/querybatch`) | `brew vulns` subprocess | `vulns_scan_all` / `vulns_scan_one` IPC | `vulnerability_scanning_enabled` | `paranoid_mode` (kills the whole subprocess spawn) |
+| `github.com`, `gitlab.com`, `codeberg.org` (source-URL + version-tag resolution) | `brew vulns` subprocess | same | same | same |
+| `api.github.com/advisories/{GHSA_ID}` (GHSA enrichment) | brew-browser Rust code (`vulns::enrich::enrich`) | invoked from `vulns_scan_all` / `vulns_scan_one` after the brew-vulns subprocess returns | `vulnerability_scanning_enabled` AND `github_enabled` (triple-defense) | `paranoid_mode` |
+| `brew install homebrew/brew-vulns/brew-vulns` (one-click installer for the subcommand) | brew-browser Rust code via `tokio::process::Command` on `brew` | `vulns_install_helper` IPC | none (intentional — see §17.3) | `paranoid_mode` via `require_network` |
+
+The first three appear as path **k** in the README disclosure, broken out by their distinct trust boundaries: the OSV traffic and the source-forge tag resolution are bundled as "what brew-vulns talks to" because they share the same subprocess origin; the GHSA enrichment is called out separately because it's our binary, not the subprocess.
+
+### 17.3 Gate composition
+
+`AppState::require_vulnerability_scanning()` (`src-tauri/src/state.rs:355`) is the chokepoint. It composes the master `require_network` gate with the per-feature toggle and behaves as:
+
+| Settings state | Paranoid mode | Result |
+|---|---|---|
+| `Loaded(s)` with `s.vulnerability_scanning_enabled == true` | OFF | `Ok(())` |
+| `Loaded(s)` with `s.vulnerability_scanning_enabled == false` | OFF | `Err(FeatureDisabled { feature: "vulnerability_scanning" })` |
+| `Loaded(s)` with `s.vulnerability_scanning_enabled == true` | ON | `Err(ParanoidModeBlocked { feature: "vulnerability_scanning" })` (master switch wins, routes user to Offline Mode toggle) |
+| `Loaded(s)` with `s.vulnerability_scanning_enabled == false` | ON | `Err(ParanoidModeBlocked { ... })` (master switch wins regardless) |
+| `FirstLaunch` | (defaults imply both false) | `Err(FeatureDisabled { ... })` — opt-in posture preserved; no OSV traffic on a fresh install |
+| `Corrupt { .. }` | (inner gate fires) | `Err(ParanoidModeBlocked { ... })` — fail-closed per §13.4 |
+
+Five rejection paths pinned by tests at `src-tauri/src/state.rs:602-680`:
+
+- `require_vulnerability_scanning_allows_when_toggle_on_and_paranoid_off`
+- `require_vulnerability_scanning_blocks_when_toggle_off`
+- `require_vulnerability_scanning_blocks_when_paranoid_on_even_if_toggle_on`
+- `require_vulnerability_scanning_blocks_on_first_launch`
+- `require_vulnerability_scanning_blocks_when_corrupt`
+
+The `FeatureDisabled` variant (from v0.4.0) is reused here so the frontend toast routes to the per-feature toggle (not the master Offline Mode switch) — same UX pattern as Enhanced Trending History.
+
+**`vulns_install_helper` exception:** the one-click installer for the `brew vulns` subcommand only consults `require_network("vulns_install")` — NOT `require_vulnerability_scanning`. Refusing to install the prerequisite until the feature is already on would be backwards (typical first-run flow: user wants to enable scanning → taps install → flips toggle → scans). The master paranoid gate still fires.
+
+**GHSA enrichment triple-defense:** inside `vulns::enrich::enrich()`, after `require_vulnerability_scanning` has already passed, we re-check `settings.github_enabled` before calling `api.github.com/advisories/{GHSA_ID}`. This means three gates must align for the GHSA request to leave the box: paranoid OFF, vuln-scanning ON, github ON. The check is local (no IPC), so the cost is a single bool read per scan.
+
+### 17.4 Subprocess safety
+
+`brew vulns` is invoked via `tokio::process::Command::new(brew).args(["vulns", ...])`. argv passing is shell-safe by default (no shell expansion, no string concatenation). We still validate every formula name against `^[a-z0-9._@+-]+$` via `vulns::client::validate_formula_name` before passing it through. This mirrors the same defense-in-depth posture as `services_list` (§13.3) and `validate_cask_token` (§13.7) — argv-safe + validator-checked is strictly better than argv-safe alone.
+
+Validation tests at `src-tauri/src/vulns/client.rs`:
+- `validate_formula_name_accepts_typical_names`
+- `validate_formula_name_rejects_shell_meta`
+- `validate_formula_name_rejects_empty_and_oversize`
+
+**Install probe:** `check_brew_vulns_installed` runs `brew --prefix brew-vulns` (status-code-only check: exit 0 with prefix path → installed, exit 1 with "No available formula" → not installed). NOT `brew commands` — that command enumerates built-in + tap-resident subcommands but does NOT include external `brew-FOO` binaries installed via the brew-vulns formula at `$(brew --prefix)/bin/brew-vulns`. The smoke-test cycle on the user's real install caught this assumption (`tasks/2026-05/20-v0.5.0-vulnerability-scanning.md` § "Smoke test cycle" #2); the trap is commented at the probe site.
+
+**Subprocess exit-code semantics:** `brew vulns --json` follows the standard CI-scanner convention — exit 0 means "scan succeeded, no findings", exit 1 means "scan succeeded, findings present", exit ≥ 2 is a real error. `vulns::client::scan_all` / `scan_one` use a private `run_vulns_capture` wrapper (NOT the shared `run_brew_capture`) that accepts both exit 0 and 1 as success and only typed-errors on ≥ 2. Treating exit 1 as a hard failure would discard the JSON output for every install that actually has vulnerabilities — the common case. Trap is commented at the wrapper site; lesson recorded as the durable "Smoke-test discipline for subprocess-integration features" ADR (`decisions.md`, 2026-05-27).
+
+### 17.5 Cache safety
+
+Two new on-disk caches at `~/Library/Application Support/brew-browser/`:
+
+- `vulns_cache.json` — per-package scan records keyed by `"formula:name:version"`, plus an install-set SHA-256 fingerprint for the whole-scan skip. **1 MiB cap** via `read_capped` on load and an explicit size check on write. Atomic-write via the shared `atomic_write` helper. Per-package TTL 6 hours.
+- `ghsa_cache.json` — GHSA enrichment records keyed by GHSA ID. **2 MiB cap** (richer payloads — patched-version ranges, reference URLs, summaries). Same atomic-write + read-capped pattern.
+
+Both files fail soft on corrupt + future-schema: a parse error returns an empty cache rather than panicking, and the next successful scan overwrites with valid content. No first-launch user can be wedged by a bad cache file.
+
+### 17.6 Install-set fingerprint
+
+`vulns::fingerprint::compute()` produces a SHA-256 (via the new `sha2` + `hex` deps) over sorted `kind:name:version` lines of every installed package. Recorded into `vulns_cache.json` alongside the entries. On the next `vulns_scan_all` call, the current fingerprint is compared against the stored one — match means "nothing changed since the last scan, serve cache, skip the 60+s subprocess spawn." The `force=true` parameter on `vulns_scan_all` (wired to the Refresh button) bypasses the skip predicate.
+
+**Why SHA-256 instead of `DefaultHasher`?** Rust's `DefaultHasher` is intentionally non-deterministic across process runs — its salt is randomized to defeat HashDoS. A hash recorded in v0.5.0 disk cache would mismatch every subsequent launch, silently invalidating the skip predicate. SHA-256 is deterministic across runs, machines, and Rust versions.
+
+### 17.7 First-launch posture preserved
+
+Both new settings fields default `false`:
+
+- `Settings::vulnerability_scanning_enabled = false` (defaulted explicitly at `src-tauri/src/commands/settings.rs:206`)
+- `Settings::github_enabled = false` (unchanged from Phase 12c)
+
+`Settings::default()` and `FirstLaunch` both produce these defaults. A user who installs brew-browser v0.5.0 and never visits Settings generates **zero** OSV traffic, **zero** GHSA traffic, and never invokes the `brew vulns` subprocess. The README disclosure list reflects this — the path is enumerated but the in-app per-row indicator shows it as blocked until the user explicitly opts in.
+
+### 17.8 Threat model
+
+| Threat | Mitigation |
+|---|---|
+| Compromised brew-vulns subcommand serves crafted JSON | `brew vulns` is shipped via Homebrew's own tap (`Homebrew/homebrew-brew-vulns`); same trust posture as `brew` itself. The parsed output uses `serde(default)` everywhere so a missing/renamed field doesn't panic; oversized payloads are bounded by the 1 MiB cache cap. |
+| Compromised `api.osv.dev` injects malicious vuln record | Our binary never receives the OSV response directly — `brew vulns` does, and it ships a parsed/validated record shape. The worst case is rendering false-positive CVEs (no remote-code-execution vector — no `@html`, no eval, all renders through Svelte's auto-escape). |
+| Compromised `api.github.com/advisories` injects malicious GHSA | Same Svelte auto-escape protection. The enrichment is best-effort; rendering an over-the-top GHSA payload just shows wrong prose in the Security card. |
+| GitHub rate-limit DoS from enrichment loop | Enrichment is per-vuln, soft-fails on 403/429, logs but doesn't toast. Cache de-dupes by GHSA ID so a popular advisory is fetched once. |
+| User opts in then forgets the toggle exists | Disclosure list at the bottom of Settings → Network shows the entry with current allowed/blocked state. Visible audit. |
+| Future contributor adds a fourth gate-bypass | `require_vulnerability_scanning` is the only chokepoint; any new IPC must consult it. The triple-defense pattern is documented at the gate definition. |
+| Subprocess argv injection via formula name | Defense-in-depth via `validate_formula_name` on top of argv-safe `Command::new().arg()`. The validator rejects shell metas, empties, oversize input. |
+| Cache file tampering | 1 MiB / 2 MiB read caps prevent runaway loads. `serde(default)` on every field prevents panic on schema drift. Corrupt file returns empty cache; next scan rewrites with valid content. |
+| Brew-vulns JSON schema drift silently loses data | Captured-fixture regression test (`vulns::client::tests::raw_scan_result_parses_real_brew_vulns_output`) pins the real wire shape against the parser. A schema change that breaks parsing fails CI; a schema change that *partially* parses (e.g. a renamed field falling to a default) is still defended by the explicit field-by-field assertions in the same test (severity case-folding, `fixed_versions: []` → `fixed_in: None`, `summary: null` → `""`). |
+
+### 17.9 Verdict
+
+The opt-in posture, the per-feature gate composed with the master paranoid gate, the triple-defense for GHSA enrichment, the subprocess-as-trust-boundary architecture, and the deterministic install-set fingerprint together preserve the READY-FOR-SCRUTINY posture established by Wave 3 and re-verified by §14, §15, and §16. The new path is a feature gate, not a posture change.
+
+**Pre-launch checklist:**
+
+- [ ] All five `require_vulnerability_scanning` tests pass (`cargo test require_vulnerability_scanning`)
+- [ ] `vulns_install_helper` only consults `require_network`, NOT `require_vulnerability_scanning` (pinned by the IPC doc comment + manual test)
+- [ ] GHSA enrichment soft-fails when `github_enabled` is OFF (pinned by `vulns::enrich::tests`)
+- [ ] First-launch settings.json absent → `vulnerability_scanning_enabled` reads false (forward-compat test)
+- [ ] Cache files corrupt → empty cache returned, no panic (`vulns::cache::tests::load_corrupt_returns_empty`)
+- [ ] Subprocess argv validator rejects shell metas (`validate_formula_name_rejects_shell_meta`)
+- [ ] Disclosure list in `SettingsSectionNetwork.svelte` includes new path k entries with allowed/blocked indicators
