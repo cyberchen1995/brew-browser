@@ -127,7 +127,7 @@
 
         <div class="feature">
           <h3>Trending</h3>
-          <p>Top packages from Homebrew's own published <code>formulae.brew.sh</code> install analytics. 30 / 90 / 365 day windows.</p>
+          <p>Top packages from Homebrew's own published <code>formulae.brew.sh</code> install analytics. 30 / 90 / 365 day windows, a velocity index (recent month vs prior eleven so genuinely emerging packages out-rank stably-popular ones), and opt-in per-package install-trend sparklines.</p>
         </div>
 
         <div class="feature">
@@ -151,6 +151,11 @@
         </div>
 
         <div class="feature">
+          <h3>Security</h3>
+          <p>Opt-in vulnerability scanning. Surfaces known CVEs against your installed formulae via the official <code>brew vulns</code> subcommand (OSV.dev under the hood), with optional GHSA enrichment when you're signed into GitHub. Dashboard Exposure card, Sidebar count badge, per-row severity dots, PackageDetail Security card with one-click <strong>Upgrade to fix</strong> wired straight to the existing upgrade pipeline. Off by default; first-launch posture unchanged.</p>
+        </div>
+
+        <div class="feature">
           <h3>Native &amp; fast</h3>
           <p>Tauri 2 native shell, system WebView, native macOS title bar with traffic-light alignment. Cmd+K command palette, Cmd+0…6 to jump between sections, persistent type-ahead search in the sidebar, drag-resizable detail pane, collapsible sidebar.</p>
         </div>
@@ -167,7 +172,7 @@
         <li><strong>No EULA.</strong> No click-through to use the app.</li>
         <li><strong>No telemetry.</strong> No analytics, no crash reporting, no third-party pixels.</li>
         <li><strong>No accounts.</strong> No sign-in, no cloud sync, no required services.</li>
-        <li><strong>No surprise network.</strong> Every outbound call is documented and gated. Nine paths total — Homebrew's analytics for Trending, the catalog refresh, cask homepage probes (SSRF-filtered), GitHub repo stats, GitHub OAuth + authed actions when you opt in, <code>brew</code> itself, your default browser, the updater manifest, and the signed updater artifact. Full enumeration in the <a href="https://github.com/msitarzewski/brew-browser/blob/main/README.md#open-source-posture">README network posture</a>. Flip on <strong>Offline Mode</strong> in Settings to block them all in one click.</li>
+        <li><strong>No surprise network.</strong> Every outbound call is documented and gated. Eleven paths total — Homebrew's analytics for Trending, the catalog refresh, cask homepage probes (SSRF-filtered), GitHub repo stats, GitHub OAuth + authed actions when you opt in, <code>brew</code> itself, your default browser, the updater manifest, the signed updater artifact, the opt-in Enhanced Trending History endpoint (project infra, IP-redacted logs), and the opt-in Vulnerability Scanning surface (OSV.dev + source forges via <code>brew vulns</code> subprocess + optional GHSA enrichment when you're also signed into GitHub). Full enumeration in the <a href="https://github.com/msitarzewski/brew-browser/blob/main/README.md#open-source-posture">README network posture</a>. Flip on <strong>Offline Mode</strong> in Settings to block them all in one click.</li>
       </ul>
     </section>
 

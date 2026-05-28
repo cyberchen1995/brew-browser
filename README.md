@@ -17,13 +17,14 @@ Homebrew is the standard package manager on macOS. brew-browser gives it a real 
 
 ## Features
 
-- **Dashboard** — your Homebrew setup at a glance: installed count, updates available, brew version, formula/cask split, top-categories donut chart, storage usage (Cellar / Caskroom / var/log / cache) with one-click "Reveal in Finder"
-- **Library** — every installed formula and cask in one dense, filterable list, with outdated badges, sortable columns, category chip filters, and a slide-over detail panel
+- **Dashboard** — your Homebrew setup at a glance: installed count, updates available, brew version, formula/cask split, top-categories donut chart, storage usage (Cellar / Caskroom / var/log / cache) with one-click "Reveal in Finder", and an opt-in **Exposure** card surfacing known vulnerabilities across your install
+- **Library** — every installed formula and cask in one dense, filterable list, with outdated badges, sortable columns, category chip filters, an opt-in **Vulnerable** filter pill, inline severity dots, and a slide-over detail panel
 - **Discover** — search the full Homebrew catalog (15,974 packages, bundled at build time + user-refreshable) by name or browse via the 19-category tile grid; multi-select chip filter
-- **Trending** — top packages from Homebrew's published `formulae.brew.sh` analytics, with 30 / 90 / 365-day windows and sortable columns
+- **Trending** — top packages from Homebrew's published `formulae.brew.sh` analytics, with 30 / 90 / 365-day windows, sortable columns, a **velocity index** (recent-month vs prior-11-month adoption signal), and opt-in per-package install-trend sparklines
 - **Snapshots** — save and restore Brewfiles using Homebrew's own `brew bundle` mechanism; "set up a new Mac" in one click
 - **Services** — list, start, stop, and restart background services managed by launchd through `brew services`
-- **Activity** — every `brew` invocation streams live into a bottom drawer with full stdout/stderr; session history persists across launches (last 50 jobs, capped lines)
+- **Security** — opt-in vulnerability scanning. Surfaces known CVEs against your installed formulae via the official `brew vulns` subcommand (OSV.dev), with optional GHSA enrichment when you're signed into GitHub. Inline severity dots, per-package Security card with "Upgrade to fix" wired to the existing upgrade pipeline. Off by default; one-click installer for `brew vulns` itself when you opt in
+- **Activity** — every `brew` invocation streams live into a bottom drawer with full stdout/stderr; session history persists across launches (last 200 jobs, capped lines)
 
 A global Cmd+K command palette covers the verbs. Cmd+0 returns to the Dashboard; Cmd+1…6 jumps between sections. Cmd+, opens Settings. Click the 🍺 brand to return home. Window dragging works from any panel header (native macOS overlay title bar + NSVisualEffectView vibrancy).
 
@@ -115,7 +116,24 @@ Contributions welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the dev loop
 
 ## Status
 
-**v0.3.1** shipped (signed + notarized). All seven core panes live: Dashboard, Library, Discover (with bundled catalog + 15,725 AI-curated friendly names and summaries), Trending, Snapshots, Services, and Activity. Optional GitHub integration via OAuth Device Flow is intent-discovered — sign-in only prompts when you actually try to star / watch / file an issue, never as static UI clutter. The Keychain is touched lazily so a fresh install never triggers a macOS auth prompt unless you actually use a GitHub feature. Settings ships with Offline Mode and a corrupt-recovery default. Native macOS title bar with traffic-light alignment, collapsible sidebar with persistent type-ahead search, (i) info popovers in place of AI badges for every enriched field. Expect rough edges in some app-icon edge cases (pkg-installer casks without `.app` bundles) and first-run niceties.
+**v0.5.0** shipped (signed + notarized). All seven core panes live: Dashboard, Library, Discover (with bundled catalog + 15,725 AI-curated friendly names and summaries), Trending, Snapshots, Services, and Activity. Optional GitHub integration via OAuth Device Flow is intent-discovered — sign-in only prompts when you actually try to star / watch / file an issue, never as static UI clutter. Two opt-in surfaces beyond the always-on core: **Enhanced Trending History** (v0.4.0+) for per-package install-trend sparklines, and **Vulnerability Scanning** (v0.5.0+) shelling out to the official `brew vulns` subcommand for CVE surfacing against your installed formulae. Settings ships with Offline Mode and a corrupt-recovery default. Native macOS title bar with traffic-light alignment, collapsible sidebar with persistent type-ahead search, (i) info popovers in place of AI badges for every enriched field.
+
+**v0.5.0** — opt-in vulnerability scanning. Highlights:
+- **`brew vulns` integration.** New Settings → Network → Vulnerability Scanning subsection (opt-in, off by default) shells out to the official `Homebrew/homebrew-brew-vulns` subcommand by Andrew Nesbitt to query OSV.dev for known CVEs against installed formulae. One-click installer for the `brew vulns` subcommand itself when you opt in — no terminal required.
+- **Dashboard Exposure card.** Severity-tiered counts (critical/high/medium/low), ✓ clean-state framing when no vulns, Scan-now button. Hidden when feature off.
+- **Sidebar count badge.** Number of vulnerable packages with max-severity tone. Hidden when 0 or feature off.
+- **PackageRow severity dots + PackageDetail Security card.** Inline severity indicator on every vulnerable row. PackageDetail Security card with per-CVE rows, severity pills, "Patched in X" badges, **"Upgrade to fix"** wired to the existing brew upgrade pipeline. Empty-summary entries fall back to canonical detail pages (NVD / OSV / GHSA).
+- **Library Vulnerable filter pill.** Danger-toned count badge, pre-selected when you click "View vulnerable packages →" from the Dashboard.
+- **Optional GHSA enrichment.** When both vuln-scanning AND GitHub sign-in are on, GHSA-prefixed advisories pull richer descriptions, patched-version ranges, and reference links from `api.github.com/advisories`. Triple-gated; best-effort; 7-day cache.
+- **Install-set SHA-256 fingerprint.** Daily app opens with no install changes serve the cached report instantly instead of re-shelling `brew vulns` (60+ seconds on 200 packages).
+- **Post-install exposure heads-up.** Once-per-session, after a successful install/upgrade, a passive toast surfaces if you have vulnerable packages elsewhere — the "install a thing → notice you have N existing CVEs" moment.
+- **Cask coverage gap stated honestly.** `brew vulns` is formula-only; cask Security cards say so rather than faking clean state.
+
+**v0.4.0** — trending velocity + opt-in install-history endpoint. Highlights:
+- **Velocity index on Trending.** Default sort. Compares each package's recent-month installs to its prior-11-month average so genuinely emerging packages surface ahead of stably-popular ones. New 🔥 / ❄️ / dash badges per row.
+- **Parallel install + install-on-request fetch.** Server-side join across 30d/90d/365d windows lets the velocity math see all three time horizons in one pass instead of three sequential round-trips.
+- **Opt-in Enhanced Trending History.** New Settings → Network → Enhanced Trending History subsection (off by default; distinct trust boundary from `formulae.brew.sh`). When on, inline per-row sparklines on Trending + a per-package history chart on PackageDetail, fed by a project-operated endpoint (`brew-browser.zerologic.com/trending-history/*`) with IP-redacted server logs (the privacy claim is auditable — Caddy block pinned in `memory-bank/security.md` §16).
+- **Dashboard polish.** Donut center text removed — the legend already carries the affordance, and removing the inner text frees up the chart for a cleaner look on narrow windows.
 
 **v0.3.1** — same-day cumulative point release on top of v0.3.0. Highlights:
 - **Magic search.** Search now matches name + AI friendly-name + AI summary + upstream desc + category labels (and Tier B tags when they land). "video player" finds VLC, "Video & Audio" returns the whole category. Sub-20ms in-process scan via a new `local_search` IPC; replaces the old `brew search` shell-out.
