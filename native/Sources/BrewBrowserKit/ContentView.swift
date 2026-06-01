@@ -3,10 +3,12 @@ import SwiftUI
 /// Root chrome — stock `NavigationSplitView`, no overrides. Apple renders the
 /// sidebar, the unified title bar, the toolbar, and all materials. We don't
 /// touch the window, tint, transparency, or title bar.
-struct ContentView: View {
+public struct ContentView: View {
     @State private var model = AppModel()
 
-    var body: some View {
+    public init() {}
+
+    public var body: some View {
         NavigationSplitView {
             List(Section.allCases, selection: $model.selection) { section in
                 Label(section.rawValue, systemImage: section.symbol)

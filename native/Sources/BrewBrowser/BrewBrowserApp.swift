@@ -1,4 +1,5 @@
 import SwiftUI
+import BrewBrowserKit
 
 @main
 struct BrewBrowserApp: App {

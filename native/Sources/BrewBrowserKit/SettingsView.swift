@@ -11,8 +11,10 @@ import SwiftUI
 /// Native Settings — stock `TabView` with the default top tab bar. This is the
 /// canonical SwiftUI macOS preferences shape; we tried sidebar variants and the
 /// default is cleaner and simpler. Opened by ⌘, and the toolbar gear.
-struct SettingsView: View {
-    var body: some View {
+public struct SettingsView: View {
+    public init() {}
+
+    public var body: some View {
         TabView {
             AppearanceSettings()
                 .tabItem { Label("Appearance", systemImage: "paintbrush") }
