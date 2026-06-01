@@ -6,6 +6,7 @@ import AppKit
 /// Info.plist icon — only the `build-app.sh` bundle does. Loading from
 /// `Bundle.module` makes the real icon show in BOTH run paths. Call once at
 /// launch (from the executable's AppDelegate).
+@MainActor
 public func applyDockIcon() {
     guard let url = Bundle.module.url(forResource: "AppIcon", withExtension: "icns"),
           let image = NSImage(contentsOf: url) else { return }
@@ -125,6 +126,8 @@ public struct ContentView: View {
             DashboardView(model: model)
         case .library:
             LibraryView(model: model)
+        case .discover:
+            DiscoverView(model: model)
         default:
             PlaceholderView(section: model.selection)
         }

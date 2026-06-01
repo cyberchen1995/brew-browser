@@ -56,6 +56,21 @@ struct LibraryRow: Identifiable, Hashable, Sendable {
     var outdatedRank: Int { isOutdated ? 1 : 0 }
 }
 
+/// A Discover table row — a catalog package (available, maybe not installed)
+/// with its install state + AI-gated summary precomputed for pure-value columns.
+struct DiscoverRow: Identifiable, Hashable, Sendable {
+    var id: String { "\(kind.rawValue):\(token)" }
+    let token: String
+    let name: String
+    let version: String
+    let kind: InstalledPackage.Kind
+    let homepage: String
+    let summary: String
+    let isInstalled: Bool
+
+    var installedRank: Int { isInstalled ? 1 : 0 }
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -124,6 +139,79 @@ final class AppModel {
         case .formulae: return installed.lazy.filter { $0.kind == .formula }.count
         case .casks:    return installed.lazy.filter { $0.kind == .cask }.count
         case .outdated: return outdatedNames.count
+        }
+    }
+
+    // ---- Discover (catalog browse) ----
+    /// Full catalog, loaded lazily from the bundled gzip on first Discover open.
+    var catalog: [CatalogPackage] = []
+    var catalogLoading = false
+    /// Selected category slug for the Discover filter; nil = All.
+    var discoverCategory: String? = nil
+    /// Sort order for the Discover `Table`.
+    var discoverSort: [KeyPathComparator<DiscoverRow>] = [
+        KeyPathComparator(\DiscoverRow.name, order: .forward)
+    ]
+    /// (slug, label) list for the Discover category Picker (from the bundled
+    /// category catalog; empty until the catalog is open).
+    var categoryList: [(slug: String, label: String)] {
+        catalog.isEmpty ? [] : (categoryCatalog?.allCategories() ?? [])
+    }
+
+    /// Discover rows: catalog filtered by category + the shared search field,
+    /// enrichment-joined, install-state flagged. (Single `.searchable` rule:
+    /// reuses `globalQuery`, never adds its own field — see libraryRows.)
+    var discoverRows: [DiscoverRow] {
+        guard !catalog.isEmpty else { return [] }
+        let installedIDs = Set(installed.map { "\($0.kind.rawValue):\($0.name)" })
+        let showSummary = settings.aiFeaturesVisible
+        let q = globalQuery.trimmingCharacters(in: .whitespaces)
+        let cat = discoverCategory
+
+        return catalog.compactMap { pkg in
+            if let cat, !(categoryCatalog?.isMember(token: pkg.token, kind: pkg.kind, slug: cat) ?? false) {
+                return nil
+            }
+            if !q.isEmpty,
+               !pkg.token.localizedCaseInsensitiveContains(q),
+               !pkg.displayName.localizedCaseInsensitiveContains(q) {
+                return nil
+            }
+            return DiscoverRow(
+                token: pkg.token,
+                name: pkg.displayName,
+                version: pkg.version,
+                kind: pkg.kind,
+                homepage: pkg.homepage,
+                summary: showSummary ? (enrichment?.entry(for: pkg.token)?.summary ?? pkg.desc) : pkg.desc,
+                isInstalled: installedIDs.contains("\(pkg.kind.rawValue):\(pkg.token)")
+            )
+        }
+    }
+
+    var sortedDiscoverRows: [DiscoverRow] { discoverRows.sorted(using: discoverSort) }
+
+    /// Load + decompress the bundled catalog on first Discover open.
+    func loadCatalog() async {
+        guard catalog.isEmpty, !catalogLoading else { return }
+        catalogLoading = true
+        catalog = await catalogService.all()
+        catalogLoading = false
+    }
+
+    /// Whether cask icon fetching is allowed right now — Offline Mode off AND the
+    /// cask-icon setting isn't `off`. Mirrors the Tauri `cask_icon` gate.
+    private var caskIconsEnabled: Bool {
+        guard !settings.paranoidMode else { return false }
+        return settings.caskIconMode != .off
+    }
+
+    /// Resolve a row's icon into `iconCache` (async, fire-and-forget from the
+    /// view's `.task`). Casks only; formulae always render the SF Symbol.
+    func resolveIcon(token: String, kind: InstalledPackage.Kind, homepage: String) async {
+        guard kind == .cask, iconCache[token] == nil else { return }
+        if let url = await iconService.iconFileURL(token: token, homepage: homepage, enabled: caskIconsEnabled) {
+            iconCache[token] = url
         }
     }
 
@@ -208,8 +296,13 @@ final class AppModel {
     var detailStarred: Bool?
     var githubStatus: GithubStatus?
 
-    private let catalog = CategoryCatalog.loadBundled()
+    private let categoryCatalog = CategoryCatalog.loadBundled()
     private let enrichment = EnrichmentCatalog.loadBundled()
+    private let catalogService = CatalogService()
+    private let iconService = IconService()
+    /// token → resolved on-disk icon file (cached in-model so SwiftUI rows don't
+    /// re-fetch on every redraw). nil value = resolved-but-no-icon.
+    var iconCache: [String: URL] = [:]
     let settings = AppSettings.shared
     private let vulns = VulnsService()
     private let trendingHistory = TrendingHistoryService()
@@ -262,6 +355,14 @@ final class AppModel {
             StorageItem(label: "Download cache", path: "~/Library/Caches/Homebrew", bytes: 17_700_000_000),
         ]
         m.dashboardLoaded = true
+        m.catalog = [
+            CatalogPackage(token: "wget", displayName: "wget", desc: "Retrieve files over HTTP/FTP", homepage: "https://www.gnu.org/software/wget/", version: "1.24.5", kind: .formula),
+            CatalogPackage(token: "ripgrep", displayName: "ripgrep", desc: "Fast recursive grep", homepage: "https://github.com/BurntSushi/ripgrep", version: "14.1.0", kind: .formula),
+            CatalogPackage(token: "neovim", displayName: "neovim", desc: "Hyperextensible Vim-based editor", homepage: "https://neovim.io/", version: "0.10.0", kind: .formula),
+            CatalogPackage(token: "iterm2", displayName: "iTerm2", desc: "Terminal emulator", homepage: "https://iterm2.com/", version: "3.5.2", kind: .cask),
+            CatalogPackage(token: "slack", displayName: "Slack", desc: "Team communication and collaboration", homepage: "https://slack.com/", version: "4.39.0", kind: .cask),
+            CatalogPackage(token: "visual-studio-code", displayName: "Visual Studio Code", desc: "Code editor", homepage: "https://code.visualstudio.com/", version: "1.90.0", kind: .cask),
+        ]
         return m
     }
 #endif
@@ -327,7 +428,7 @@ final class AppModel {
         storage = await storageList
         brewVersion = await ver
         brewPrefix = await pfx
-        categories = catalog?.breakdown(installed: installed) ?? []
+        categories = categoryCatalog?.breakdown(installed: installed) ?? []
         runningServices = await services
         dashboardLoaded = true
     }
@@ -376,7 +477,7 @@ final class AppModel {
 
         // Bundled, synchronous-ish lookups first (instant).
         detailEnrichment = settings.aiFeaturesVisible ? enrichment?.entry(for: pkg.name) : nil
-        detailCategories = catalog?.categoryLabels(for: pkg.name, kind: pkg.kind) ?? []
+        detailCategories = categoryCatalog?.categoryLabels(for: pkg.name, kind: pkg.kind) ?? []
 
         do {
             let info = try await brew.info(name: pkg.name, kind: pkg.kind)

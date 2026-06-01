@@ -41,7 +41,12 @@ let package = Package(
                 // App icon, loaded at runtime via Bundle.module to set the Dock
                 // icon. Works even for the bare `swift build` / Xcode ⌘R binary
                 // (which has no .app bundle Info.plist icon).
-                .copy("Resources/AppIcon.icns")
+                .copy("Resources/AppIcon.icns"),
+                // Full Homebrew catalog (gzipped) for the Discover panel —
+                // 8.3k formulae + 7.7k casks. Same data the Tauri app bundles
+                // (src-tauri/data/catalog); decompressed + parsed at runtime by
+                // CatalogService. ~6MB gzipped / ~44MB raw, so kept compressed.
+                .copy("Resources/catalog")
             ]
         )
     ]

@@ -53,6 +53,21 @@ struct CategoryCatalog: Sendable {
             .map { labels[$0] ?? $0.capitalized }
     }
 
+    /// All known categories as (slug, label), alphabetised by label — powers the
+    /// Discover category Picker. Excludes the "uncategorized" bucket.
+    func allCategories() -> [(slug: String, label: String)] {
+        labels
+            .filter { $0.key != "uncategorized" }
+            .map { (slug: $0.key, label: $0.value) }
+            .sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+    }
+
+    /// True if a package (by token + kind) belongs to the given category slug —
+    /// the Discover category filter predicate.
+    func isMember(token: String, kind: InstalledPackage.Kind, slug: String) -> Bool {
+        slugs(for: token, kind: kind).contains(slug)
+    }
+
     /// Top-N category breakdown across the installed set. Each package
     /// contributes 1 to each of its categories (multi-membership), matching the
     /// Tauri model. "uncategorized" is folded into an "Other" bucket along with
