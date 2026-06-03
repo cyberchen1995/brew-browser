@@ -77,6 +77,7 @@ private struct SettingsDTO: Codable {
     var skippedUpdateVersions: [String]
     var enhancedTrendingEnabled: Bool
     var vulnerabilityScanningEnabled: Bool
+    var liveEnrichmentEnabled: Bool
 
     /// Explicit keys = no automatic conversion. These are the literal JSON
     /// keys the Tauri app writes (`commands/settings.rs` field names under
@@ -93,6 +94,7 @@ private struct SettingsDTO: Codable {
         case skippedUpdateVersions
         case enhancedTrendingEnabled
         case vulnerabilityScanningEnabled
+        case liveEnrichmentEnabled
     }
 
     /// All-defaults DTO. Mirrors Rust `impl Default for Settings`
@@ -112,7 +114,8 @@ private struct SettingsDTO: Codable {
         updateAutoCheck: Bool,
         skippedUpdateVersions: [String],
         enhancedTrendingEnabled: Bool,
-        vulnerabilityScanningEnabled: Bool
+        vulnerabilityScanningEnabled: Bool,
+        liveEnrichmentEnabled: Bool
     ) {
         self.paranoidMode = paranoidMode
         self.catalogAutoRefresh = catalogAutoRefresh
@@ -125,6 +128,7 @@ private struct SettingsDTO: Codable {
         self.skippedUpdateVersions = skippedUpdateVersions
         self.enhancedTrendingEnabled = enhancedTrendingEnabled
         self.vulnerabilityScanningEnabled = vulnerabilityScanningEnabled
+        self.liveEnrichmentEnabled = liveEnrichmentEnabled
     }
 
     static func defaults() -> SettingsDTO {
@@ -139,7 +143,8 @@ private struct SettingsDTO: Codable {
             updateAutoCheck: false,
             skippedUpdateVersions: [],
             enhancedTrendingEnabled: false,
-            vulnerabilityScanningEnabled: false
+            vulnerabilityScanningEnabled: false,
+            liveEnrichmentEnabled: false
         )
     }
 
@@ -163,6 +168,7 @@ private struct SettingsDTO: Codable {
         skippedUpdateVersions = try c.decodeIfPresent([String].self, forKey: .skippedUpdateVersions) ?? d.skippedUpdateVersions
         enhancedTrendingEnabled = try c.decodeIfPresent(Bool.self, forKey: .enhancedTrendingEnabled) ?? d.enhancedTrendingEnabled
         vulnerabilityScanningEnabled = try c.decodeIfPresent(Bool.self, forKey: .vulnerabilityScanningEnabled) ?? d.vulnerabilityScanningEnabled
+        liveEnrichmentEnabled = try c.decodeIfPresent(Bool.self, forKey: .liveEnrichmentEnabled) ?? d.liveEnrichmentEnabled
     }
 }
 
@@ -269,6 +275,10 @@ public final class AppSettings {
     /// (`commands/settings.rs` vulnerability_scanning_enabled ~L163)
     public var vulnerabilityScanningEnabled: Bool
 
+    /// Opt-in live category/description refresh (project infra). Default `false`.
+    /// (`commands/settings.rs` live_enrichment_enabled)
+    public var liveEnrichmentEnabled: Bool
+
     /// Current load state. `.corrupt` fails closed (paranoid effectively ON).
     /// Mirrors the in-memory `SettingsLoadState` slot in `state.rs`.
     public private(set) var loadState: SettingsLoadState
@@ -289,6 +299,7 @@ public final class AppSettings {
         self.skippedUpdateVersions = dto.skippedUpdateVersions
         self.enhancedTrendingEnabled = dto.enhancedTrendingEnabled
         self.vulnerabilityScanningEnabled = dto.vulnerabilityScanningEnabled
+        self.liveEnrichmentEnabled = dto.liveEnrichmentEnabled
         self.loadState = loadState
         self.clamp()
     }
@@ -454,7 +465,8 @@ public final class AppSettings {
             updateAutoCheck: updateAutoCheck,
             skippedUpdateVersions: skippedUpdateVersions,
             enhancedTrendingEnabled: enhancedTrendingEnabled,
-            vulnerabilityScanningEnabled: vulnerabilityScanningEnabled
+            vulnerabilityScanningEnabled: vulnerabilityScanningEnabled,
+            liveEnrichmentEnabled: liveEnrichmentEnabled
         )
 
         let encoder = JSONEncoder()
@@ -566,6 +578,14 @@ public final class AppSettings {
     /// only when not paranoid, not corrupt, AND the per-feature toggle is on.
     public var enhancedTrendingAllowed: Bool {
         !paranoidMode && !isCorrupt && enhancedTrendingEnabled
+    }
+
+    /// Composed gate for live category/description updates. Mirrors Rust
+    /// `AppState::require_live_enrichment`: allowed only when not paranoid, not
+    /// corrupt, the per-feature toggle is on, AND AI features are on (enrichment
+    /// is an AI feature).
+    public var liveEnrichmentAllowed: Bool {
+        !paranoidMode && !isCorrupt && liveEnrichmentEnabled && aiFeaturesEnabled
     }
 
     /// Whether AI-derived UI (categories, enrichment, donut, pills, summaries,

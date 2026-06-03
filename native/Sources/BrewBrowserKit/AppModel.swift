@@ -154,7 +154,7 @@ final class AppModel {
             case .outdated: guard outdatedSet.contains(pkg.name) else { return nil }
             }
             if !q.isEmpty, !pkg.name.localizedCaseInsensitiveContains(q) { return nil }
-            let entry = showSummary ? enrichment?.entry(for: pkg.name) : nil
+            let entry = showSummary ? enrichmentEntry(for: pkg.name) : nil
             let friendly = entry?.friendlyName ?? ""
             return LibraryRow(
                 name: pkg.name,
@@ -217,7 +217,7 @@ final class AppModel {
                !pkg.displayName.localizedCaseInsensitiveContains(q) {
                 return nil
             }
-            let entry = showSummary ? enrichment?.entry(for: pkg.token) : nil
+            let entry = showSummary ? enrichmentEntry(for: pkg.token) : nil
             let friendly = entry?.friendlyName ?? ""
             return DiscoverRow(
                 token: pkg.token,
@@ -281,7 +281,7 @@ final class AppModel {
         return trendingEntries.map { e in
             let cat = catalogLookup(e.token, e.kind)
             let id = "\(e.kind.rawValue):\(e.token)"
-            let entry = showSummary ? enrichment?.entry(for: e.token) : nil
+            let entry = showSummary ? enrichmentEntry(for: e.token) : nil
             let friendly = entry?.friendlyName ?? ""
             return TrendingRow(
                 rank: e.rank,
@@ -449,10 +449,18 @@ final class AppModel {
     var detailWatching: Bool?
     var githubStatus: GithubStatus?
 
-    private let categoryCatalog = CategoryCatalog.loadBundled()
+    // `var` (not `let`) so a live-fetched categories file can replace the
+    // bundled baseline when the user opts into live updates.
+    private var categoryCatalog = CategoryCatalog.loadBundled()
     private let enrichment = EnrichmentCatalog.loadBundled()
     private let catalogService = CatalogService()
     private let iconService = IconService()
+
+    // Opt-in live enrichment overlay (mirrors the Tauri store overlay).
+    private let enrichmentLive = EnrichmentLiveService()
+    private var liveEnrichment: [String: EnrichmentEntry] = [:]
+    private var liveEnrichmentAttempted: Set<String> = []
+    private var liveCategoriesVersion: String = ""
     /// token → resolved on-disk icon file (cached in-model so SwiftUI rows don't
     /// re-fetch on every redraw). nil value = resolved-but-no-icon.
     var iconCache: [String: URL] = [:]
@@ -606,6 +614,10 @@ final class AppModel {
         await loadLibrary()
         dashboardLoaded = false
         await loadDashboard()
+        // Opt-in live updates: drop the per-token overlay (served data may have
+        // changed) and pull newer categories. Both no-op unless opted in.
+        resetLiveEnrichment()
+        await refreshLiveCategoriesIfNewer()
     }
 
     // MARK: - Package detail
@@ -646,7 +658,7 @@ final class AppModel {
         detailWatching = nil
 
         // Bundled, synchronous-ish lookups first (instant).
-        detailEnrichment = settings.aiFeaturesVisible ? enrichment?.entry(for: pkg.name) : nil
+        detailEnrichment = settings.aiFeaturesVisible ? enrichmentEntry(for: pkg.name) : nil
         detailCategories = categoryCatalog?.categoryLabels(for: pkg.name, kind: pkg.kind) ?? []
 
         do {
@@ -664,6 +676,11 @@ final class AppModel {
         if settings.enhancedTrendingAllowed {
             Task { await loadTrend(pkg) }
         }
+        // Opt-in live enrichment: fetch fresher friendly-name/summary/etc. for
+        // the viewed package and overlay it. No-ops unless opted in; soft-fails.
+        if settings.liveEnrichmentAllowed {
+            Task { await ensureLiveEnrichment(pkg.name) }
+        }
         if settings.githubAllowed, let hp = detailInfo?.githubHomepage {
             Task { await loadGitHub(homepage: hp, pkgId: pkg.id) }
         }
@@ -673,6 +690,48 @@ final class AppModel {
             guard detailPackage?.id == pkg.id else { return }
             brewVulnsInstalled = installed
         }
+    }
+
+    // MARK: - Live enrichment overlay (opt-in)
+
+    /// Enrichment for a token, with the live overlay preferred over the bundled
+    /// catalog (mirrors the Tauri enrichment store's `lookup`).
+    func enrichmentEntry(for token: String) -> EnrichmentEntry? {
+        liveEnrichment[token] ?? enrichment?.entry(for: token)
+    }
+
+    /// Fetch a token's live enrichment on demand and overlay it. Deduped +
+    /// soft-fail; refreshes the open detail panel if it's the same package.
+    func ensureLiveEnrichment(_ token: String) async {
+        guard settings.liveEnrichmentAllowed, !liveEnrichmentAttempted.contains(token) else { return }
+        liveEnrichmentAttempted.insert(token)
+        if let entry = await enrichmentLive.entry(token: token) {
+            liveEnrichment[token] = entry
+            if detailPackage?.name == token {
+                detailEnrichment = enrichmentEntry(for: token)
+            }
+        }
+    }
+
+    /// Drop the live overlay so the next `ensureLiveEnrichment` re-fetches.
+    private func resetLiveEnrichment() {
+        liveEnrichmentAttempted.removeAll()
+        liveEnrichment.removeAll()
+    }
+
+    /// Pull the live categories file when the served version is newer than the
+    /// last one pulled, replacing the catalog + rebuilding the dashboard
+    /// breakdown. Soft-fail; opt-in. Called on refresh.
+    func refreshLiveCategoriesIfNewer() async {
+        guard settings.liveEnrichmentAllowed,
+              let v = await enrichmentLive.version(),
+              v.categoriesVersion > liveCategoriesVersion,
+              let data = await enrichmentLive.categoriesData(),
+              let cat = CategoryCatalog.parse(data: data)
+        else { return }
+        liveCategoriesVersion = v.categoriesVersion
+        categoryCatalog = cat
+        categories = cat.breakdown(installed: installed)
     }
 
     func loadTrend(_ pkg: InstalledPackage) async {

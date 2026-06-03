@@ -72,6 +72,32 @@ struct EnrichmentCatalog: Sendable {
         return entry
     }
 
+    /// Build a capped `EnrichmentEntry` from the LIVE endpoint's **camelCase**
+    /// JSON (`friendlyName`/`summary`/`useCases`/`similar`/`tags`) — the served
+    /// per-token shape from `render_served.py`. Same caps + validators as the
+    /// bundled `parseEntry` (which reads the snake_case on-disk shape).
+    static func parseLiveEntry(_ obj: [String: Any]) -> EnrichmentEntry {
+        let friendlyName = (obj["friendlyName"] as? String).map { truncate($0, maxFriendlyNameLen) }
+        let summary = (obj["summary"] as? String).map { truncate($0, maxSummaryLen) }
+
+        let rawUseCases = (obj["useCases"] as? [String]) ?? []
+        let useCases = rawUseCases.prefix(maxUseCasesCount).map { truncate($0, maxUseCaseLen) }
+
+        let rawSimilar = (obj["similar"] as? [String]) ?? []
+        let similar = Array(rawSimilar.filter(isValidPackageName).prefix(maxSimilarCount))
+
+        let rawTags = (obj["tags"] as? [String]) ?? []
+        let tags = Array(rawTags.map { truncate($0, maxTagLen) }.filter(isValidTag).prefix(maxTagsCount))
+
+        return EnrichmentEntry(
+            friendlyName: friendlyName,
+            summary: summary,
+            useCases: Array(useCases),
+            similar: similar,
+            tags: tags
+        )
+    }
+
     // MARK: - Defensive decoding
 
     /// Build one capped `EnrichmentEntry` from a raw JSON object. Reads the

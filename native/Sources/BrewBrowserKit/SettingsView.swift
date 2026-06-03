@@ -377,6 +377,21 @@ private struct TrendingSettings: View {
                         .font(.caption).foregroundStyle(.orange)
                 }
             }
+
+            SwiftUI.Section {
+                Toggle("Fetch latest categories & descriptions", isOn: Binding(
+                    get: { settings.liveEnrichmentEnabled },
+                    set: { settings.liveEnrichmentEnabled = $0; try? settings.save() }
+                ))
+                .disabled(offline || settings.isCorrupt)
+                Text("brew-browser ships with built-in AI categories and descriptions. When on, it refreshes them from brew-browser.zerologic.com/enrichment/* — a version check on refresh, the full category list when newer, and a per-package description when you open its detail. Only the package name you're viewing is sent. Same first-party host as Enhanced Trending, a distinct /enrichment/* path. Requires AI features on.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if offline {
+                    Label("Offline Mode is on — this toggle is locked off.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
         }
         .formStyle(.grouped)
         .padding(20)

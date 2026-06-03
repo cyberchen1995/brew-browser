@@ -28,8 +28,15 @@ struct CategoryCatalog: Sendable {
     /// malformed (the Dashboard then just hides the categories card).
     static func loadBundled() -> CategoryCatalog? {
         guard let url = Bundle.module.url(forResource: "categories", withExtension: "json"),
-              let data = try? Data(contentsOf: url),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+              let data = try? Data(contentsOf: url)
+        else { return nil }
+        return parse(data: data)
+    }
+
+    /// Parse a `categories.json` blob — bundled OR live-fetched from the
+    /// `…/enrichment/categories.json` endpoint — into a catalog.
+    static func parse(data: Data) -> CategoryCatalog? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
 
         var labels: [String: String] = [:]
