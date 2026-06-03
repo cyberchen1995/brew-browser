@@ -3,52 +3,59 @@
 Build-time tooling. Regenerates the AI **categories** + **descriptions** nightly
 and renders the static tree the app fetches for **opt-in live updates**.
 
-This never runs from inside the app. It runs on a build host, on a schedule.
+Deployed as a **copy** (rsync), like `tools/trending-collector` — no git on the
+host, no data committed back from the host. Same model as trending: the served
+tree is the delivery mechanism; the app fetches it live.
 
 ## What it does (`nightly-refresh.sh`)
 
-1. `git reset --hard origin/main` — sync the regeneration logic.
-2. `tools/catalog/fetch.py` — refresh the Homebrew catalog.
-3. `tools/categorize/categorize.py` — incremental category pass → `src-tauri/data/categories.json`.
-4. `tools/enrich/enrich.py --tier-a` — incremental description pass → `src-tauri/data/enrichment.json.gz`.
-5. `tools/pipeline/render_served.py` — render `$OUT_DIR/{version.json, categories.json, entry/<token>.json}` for live fetch.
-6. Force-push the data delta to `data/auto-refresh` (always "current main + latest data"; merge it when cutting a release so the *bundled* baseline stays current too).
+1. `tools/catalog/fetch.py` — refresh the Homebrew catalog.
+2. `tools/categorize/categorize.py` — incremental category pass → `src-tauri/data/categories.json`.
+3. `tools/enrich/enrich.py --tier-a` — incremental description pass → `src-tauri/data/enrichment.json.gz`.
+4. `tools/pipeline/render_served.py` — render `$OUT_DIR/{version.json, categories.json, entry/<token>.json}`.
 
-All three LLM/catalog steps are diff-aware (their own `state/`), so a typical
-night hits the API for only the handful of packages that changed.
+Each regen step is diff-aware (its own `state/`), so a typical night hits the
+API for only the handful of packages that changed.
+
+The repo's **bundled baseline** (`src-tauri/data/*`) is refreshed *manually at
+release time*: run this pipeline locally and `git commit src-tauri/data`. Live
+fetch covers day-to-day freshness for opted-in users between releases.
 
 ## Configuration (env vars — no private host/paths in this repo)
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `REPO_DIR` | the repo this script lives in | brew-browser clone |
-| `OUT_DIR` | `$REPO_DIR/tools/pipeline/out` | served render target (point at the web-served dir) |
-| `DATA_BRANCH` | `data/auto-refresh` | branch the regenerated data is force-pushed to |
-| `PYTHON` | `$REPO_DIR/.venv/bin/python` | interpreter |
+| `TOOL_DIR` | 2 levels up from the script | the deployed copy holding `tools/` + `src-tauri/data/` |
+| `OUT_DIR` | `$TOOL_DIR/tools/pipeline/out` | served render target (point at the web-served dir) |
+| `PYTHON` | `$TOOL_DIR/.venv/bin/python` | interpreter |
 | `ENRICH_FLAGS` | `--tier-a` | enrich tiers to run |
 
-## Deploy (generic — substitute your own host/paths)
+## Deploy (rsync a minimal copy — substitute your own host/paths)
 
 ```sh
-# On the build host, as the deploy user:
-git clone https://github.com/msitarzewski/brew-browser.git "$REPO_DIR"
-cd "$REPO_DIR"
+# From a repo checkout, rsync only what the pipeline needs to the host:
+TOOL_DIR=<host>:/path/to/tools/brew-browser/enrichment
+rsync -az --delete tools/ "$TOOL_DIR/tools/"
+rsync -az --delete src-tauri/data/ "$TOOL_DIR/src-tauri/data/"   # seed + working data
+
+# On the host, once:
+cd "$TOOL_DIR_LOCAL"
 python3 -m venv .venv
 .venv/bin/pip install -r tools/categorize/requirements.txt -r tools/enrich/requirements.txt
-
-# Anthropic key — one key serves categorize + enrich. .env is gitignored.
-cp tools/enrich/.env.example tools/enrich/.env   # then paste ANTHROPIC_API_KEY
+cp tools/enrich/.env.example tools/enrich/.env          # paste ANTHROPIC_API_KEY
 cp tools/categorize/.env.example tools/categorize/.env  # same key
 
 # First run (full bulk — minutes, a few $). Subsequent runs are incremental.
-OUT_DIR="$OUT_DIR" .venv/bin/... # see nightly-refresh.sh; or just:
-OUT_DIR="$OUT_DIR" REPO_DIR="$REPO_DIR" tools/pipeline/nightly-refresh.sh
+TOOL_DIR="$TOOL_DIR_LOCAL" OUT_DIR="$OUT_DIR" tools/pipeline/nightly-refresh.sh
 ```
 
-### Cron (run after the trending collector settles)
+Re-rsync `tools/` whenever the pipeline code changes (the host copy is not a
+git checkout — it doesn't pull).
+
+### Cron (after the trending collector settles)
 
 ```cron
-30 3 * * * REPO_DIR="$REPO_DIR" OUT_DIR="$OUT_DIR" "$REPO_DIR/tools/pipeline/nightly-refresh.sh" >> "$LOGFILE" 2>&1
+30 3 * * * TOOL_DIR="$TOOL_DIR" OUT_DIR="$OUT_DIR" "$TOOL_DIR/tools/pipeline/nightly-refresh.sh" >> "$LOGFILE" 2>&1
 ```
 
 ### Caddy (serve `$OUT_DIR` at `…/enrichment/*`)
