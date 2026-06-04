@@ -155,6 +155,8 @@ public struct ContentView: View {
             ActivityView(model: model)
         case .snapshots:
             SnapshotsView(model: model)
+        case .services:
+            ServicesView(model: model)
         default:
             PlaceholderView(section: model.selection)
         }

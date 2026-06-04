@@ -28,6 +28,53 @@ struct OutdatedPackage: Identifiable, Hashable, Sendable {
     let kind: InstalledPackage.Kind
 }
 
+/// One Homebrew background service from `brew services list --json`, mirroring
+/// the Tauri `Service` shape (`commands/services.rs`).
+struct Service: Identifiable, Hashable, Sendable {
+    var id: String { name }
+    let name: String
+    let status: Status
+    let user: String?
+    let file: String?
+    let exitCode: Int?
+
+    /// `none` (formula installed but not loaded for the user) is mapped to
+    /// `.notLoaded` to avoid colliding with `Optional.none`.
+    enum Status: String, Sendable {
+        case started, stopped, error, scheduled, unknown
+        case notLoaded = "none"
+        init(raw: String) { self = Status(rawValue: raw) ?? .unknown }
+
+        /// Display order on the Services list: running first, dead last (matches
+        /// Tauri's sort — started → scheduled → error → stopped → none → unknown).
+        var sortRank: Int {
+            switch self {
+            case .started: return 0
+            case .scheduled: return 1
+            case .error: return 2
+            case .stopped: return 3
+            case .notLoaded: return 4
+            case .unknown: return 5
+            }
+        }
+
+        /// True for states that count as "running" (badge + header tally).
+        var isRunning: Bool { self == .started || self == .scheduled }
+    }
+}
+
+/// The three service mutations, matching `brew services <verb> <name>`.
+enum ServiceVerb: String, Sendable, CaseIterable {
+    case start, stop, restart
+    var verbLabel: String {
+        switch self {
+        case .start: return "Start"
+        case .stop: return "Stop"
+        case .restart: return "Restart"
+        }
+    }
+}
+
 enum BrewError: Error, LocalizedError {
     case brewNotFound
     case nonZeroExit(code: Int32, stderr: String)
@@ -276,6 +323,31 @@ actor BrewService {
             let cols = line.split(separator: " ", omittingEmptySubsequences: true)
             if cols.count >= 2, cols[1] == "started" || cols[1] == "scheduled" { acc += 1 }
         }
+    }
+
+    /// Full background-service list via `brew services list --json` (mirrors the
+    /// Tauri `services_list` command). Throws on a brew error or unparseable JSON.
+    func servicesList() async throws -> [Service] {
+        let raw = try await runCapture(["services", "list", "--json"])
+        guard let data = raw.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { throw BrewError.nonZeroExit(code: -1, stderr: "Unparseable brew services JSON") }
+        return arr.compactMap { obj in
+            guard let name = obj["name"] as? String, !name.isEmpty else { return nil }
+            return Service(
+                name: name,
+                status: Service.Status(raw: (obj["status"] as? String) ?? "unknown"),
+                user: obj["user"] as? String,
+                file: obj["file"] as? String,
+                exitCode: obj["exit_code"] as? Int
+            )
+        }
+    }
+
+    /// Run `brew services <verb> <name>`. Quiet (no streaming); throws on a
+    /// non-zero exit so the caller can surface the failure.
+    func serviceAction(_ verb: ServiceVerb, name: String) async throws {
+        _ = try await runCapture(["services", verb.rawValue, name])
     }
 
     /// brew version string, e.g. "5.1.14-112-g0d7d68d" (the build suffix kept).

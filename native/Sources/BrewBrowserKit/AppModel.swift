@@ -416,6 +416,29 @@ final class AppModel {
     var runningServices = 0
     var dashboardLoaded = false
 
+    // ---- Services panel ----
+    var services: [Service] = []
+    var servicesLoading = false
+    var servicesError: String?
+    var servicesLoaded = false
+    /// Service names with an in-flight start/stop/restart — drives the per-row
+    /// spinner and disables that row's buttons.
+    var servicePending: Set<String> = []
+
+    /// Services sorted for display: running first (status rank), then name.
+    var sortedServices: [Service] {
+        services.sorted {
+            $0.status.sortRank != $1.status.sortRank
+                ? $0.status.sortRank < $1.status.sortRank
+                : $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    /// The service record for an installed formula, if any (PackageDetail card).
+    func service(for name: String) -> Service? {
+        services.first { $0.name == name }
+    }
+
     // ---- Package detail (inspector) ----
     /// The package whose detail is loaded. This is the DATA, decoupled from
     /// presentation: it's only set by `openDetail` and only cleared by
@@ -691,6 +714,12 @@ final class AppModel {
         }
         detailLoading = false
 
+        // Services: a formula may have a background service. Load the list once
+        // (local, no network) so the detail's Service card can resolve it.
+        if pkg.kind == .formula, !servicesLoaded {
+            Task { await loadServices() }
+        }
+
         // Opt-in network sections — fire-and-forget, gated by settings.
         if settings.enhancedTrendingAllowed {
             Task { await loadTrend(pkg) }
@@ -923,6 +952,59 @@ final class AppModel {
         let label = src.deletingPathExtension().lastPathComponent
         try await snapshotStore.importFile(from: src, label: label.isEmpty ? "imported" : label)
         await loadSnapshots()
+    }
+
+    // MARK: - Services
+
+    /// Load the full background-service list (`brew services list --json`).
+    /// Soft-fails into `servicesError`; never throws.
+    func loadServices() async {
+        if servicesLoading { return }
+        servicesLoading = true
+        servicesError = nil
+        do {
+            services = try await brew.servicesList()
+        } catch {
+            servicesError = error.localizedDescription
+        }
+        servicesLoading = false
+        servicesLoaded = true
+        runningServices = services.filter { $0.status.isRunning }.count
+    }
+
+    /// Start/stop/restart a service. Hybrid UX: a per-row spinner during the
+    /// quiet run; on failure the error is surfaced as a failed Activity job +
+    /// the drawer opens. Always reloads the list afterward.
+    func performServiceAction(_ verb: ServiceVerb, name: String) async {
+        guard !servicePending.contains(name) else { return }
+        servicePending.insert(name)
+        do {
+            try await brew.serviceAction(verb, name: name)
+        } catch {
+            recordFailedServiceJob(verb, name: name, error: error)
+        }
+        servicePending.remove(name)
+        await loadServices()
+    }
+
+    /// Surface a failed service action in the Activity drawer (the "errors go to
+    /// the drawer" half of the hybrid action UX).
+    private func recordFailedServiceJob(_ verb: ServiceVerb, name: String, error: Error) {
+        let job = ActivityJob(
+            id: UUID(),
+            label: "\(verb.verbLabel) \(name) failed",
+            command: "brew services \(verb.rawValue) \(name)",
+            startedAt: Date().timeIntervalSince1970,
+            status: .failed,
+            lines: [ActivityLine(stream: .stderr, text: error.localizedDescription)],
+            exitCode: nil,
+            durationMs: nil
+        )
+        jobs.insert(job, at: 0)
+        if jobs.count > Self.maxJobs { jobs.removeLast(jobs.count - Self.maxJobs) }
+        activeJobId = job.id
+        drawerOpen = true
+        persistJobs()
     }
 
     /// Run a mutating brew command as an Activity job: creates a running job,

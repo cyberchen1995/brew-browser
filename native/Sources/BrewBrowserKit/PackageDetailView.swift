@@ -92,6 +92,7 @@ struct PackageDetailView: View {
                     if let tags = enrichment?.tags, !tags.isEmpty { tagsRow(tags) }
 
                     if AppSettings.shared.vulnerabilityScanningAllowed { securityCard }
+                    serviceCard
                     if model.detailTrend != nil { trendCard }
                     if let useCases = enrichment?.useCases, !useCases.isEmpty { useCasesCard(useCases) }
                     if let similar = enrichment?.similar, !similar.isEmpty { similarCard(similar) }
@@ -259,6 +260,43 @@ struct PackageDetailView: View {
             .padding(.top, 2)
         } label: {
             Label("Security", systemImage: "shield")
+        }
+    }
+
+    // MARK: service
+
+    /// Background-service controls for an installed formula that registers one,
+    /// mirroring the Tauri PackageDetail service card. Only renders when the
+    /// services list (loaded lazily on detail open) has a matching entry.
+    @ViewBuilder private var serviceCard: some View {
+        if pkg.kind == .formula, let svc = model.service(for: pkg.name) {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        ServiceStatusPill(status: svc.status)
+                        Spacer()
+                        if let user = svc.user {
+                            Text("user: \(user)").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    if model.servicePending.contains(svc.name) {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        HStack(spacing: 8) {
+                            Button("Start") { Task { await model.performServiceAction(.start, name: svc.name) } }
+                                .disabled(svc.status == .started)
+                            Button("Stop") { Task { await model.performServiceAction(.stop, name: svc.name) } }
+                                .disabled(svc.status == .stopped || svc.status == .notLoaded)
+                            Button("Restart") { Task { await model.performServiceAction(.restart, name: svc.name) } }
+                        }
+                        .controlSize(.small)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 2)
+            } label: {
+                Label("Service", systemImage: "gearshape.2")
+            }
         }
     }
 
