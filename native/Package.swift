@@ -38,6 +38,9 @@ let package = Package(
             resources: [
                 .copy("Resources/categories.json"),
                 .copy("Resources/enrichment.json"),
+                // GitHub Octocat mark (vector PDF, Primer/Octicons MIT). Rendered
+                // as a template image in the toolbar's "connected" chip.
+                .copy("Resources/github-mark.pdf"),
                 // App icon, loaded at runtime via Bundle.module to set the Dock
                 // icon. Works even for the bare `swift build` / Xcode ⌘R binary
                 // (which has no .app bundle Info.plist icon).

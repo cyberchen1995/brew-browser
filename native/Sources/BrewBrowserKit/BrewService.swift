@@ -89,7 +89,21 @@ enum BrewError: Error, LocalizedError {
     }
 }
 
-actor BrewService {
+/// Tracks live brew processes for cancellation. Its own actor so the registry
+/// stays correct under concurrent runs — while `BrewService` itself is a plain
+/// `Sendable` struct, so its read-only subprocess calls run in PARALLEL instead
+/// of serializing on a single actor (that serialization made the dashboard's
+/// ~8 brew calls run back-to-back, ~4s, gating first paint).
+private actor ProcessRegistry {
+    private var live: [UUID: Process] = [:]
+    func register(_ p: Process, for id: UUID) { live[id] = p }
+    func unregister(_ id: UUID) { live[id] = nil }
+    func cancel(_ id: UUID) { live[id]?.terminate() }
+}
+
+struct BrewService: Sendable {
+    private let registry = ProcessRegistry()
+
     /// Resolve the brew binary the same way the Rust backend does: prefer the
     /// Apple-Silicon prefix, fall back to the Intel path, then bare PATH lookup.
     private static func resolveBrewPath() -> String? {
@@ -171,16 +185,10 @@ actor BrewService {
     }
 
     /// Live processes keyed by job id, so a running job can be cancelled
-    /// (`cancel(jobId:)` terminates it). Cleared on termination.
-    private var liveProcesses: [UUID: Process] = [:]
-
     /// Terminate a running job's brew process (SIGTERM). No-op if already gone.
-    func cancel(jobId: UUID) {
-        liveProcesses[jobId]?.terminate()
+    func cancel(jobId: UUID) async {
+        await registry.cancel(jobId)
     }
-
-    private func register(_ p: Process, for jobId: UUID) { liveProcesses[jobId] = p }
-    private func unregister(_ jobId: UUID) { liveProcesses[jobId] = nil }
 
     /// Run a brew subcommand and stream stdout+stderr line-by-line, finishing
     /// with the exit code. Critically, **stdin is /dev/null** — so if brew tries
@@ -188,7 +196,8 @@ actor BrewService {
     /// fast with a visible error rather than hanging forever on a TTY-less pipe.
     /// The process is registered under `jobId` so `cancel(jobId:)` can kill it.
     func runStreaming(jobId: UUID, _ args: [String]) -> AsyncStream<StreamEvent> {
-        AsyncStream { continuation in
+        let registry = self.registry
+        return AsyncStream { continuation in
             guard let brew = Self.resolveBrewPath() else {
                 continuation.yield(.line("Error: couldn't find the brew executable."))
                 continuation.yield(.finished(exitCode: 127))
@@ -233,11 +242,11 @@ actor BrewService {
                 }
                 continuation.yield(.finished(exitCode: proc.terminationStatus))
                 continuation.finish()
-                Task { await self.unregister(jobId) }
+                Task { await registry.unregister(jobId) }
             }
             do {
                 try process.run()
-                Task { await self.register(process, for: jobId) }
+                Task { await registry.register(process, for: jobId) }
             } catch {
                 continuation.yield(.line("Error launching brew: \(error.localizedDescription)"))
                 continuation.yield(.finished(exitCode: -1))

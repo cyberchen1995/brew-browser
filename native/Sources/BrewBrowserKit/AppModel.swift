@@ -235,6 +235,24 @@ final class AppModel {
     var sortedDiscoverRows: [DiscoverRow] { discoverRows.sorted(using: discoverSort) }
 
     /// Load + decompress the bundled catalog on first Discover open.
+    /// Parse the bundled categories.json + enrichment.json OFF the main thread,
+    /// then backfill the bits that read them (category breakdown, open detail).
+    /// Replaces the old synchronous stored-property inits that blocked first
+    /// paint by several seconds in debug. Deduped + idempotent.
+    func loadBundledData() async {
+        if bundledDataLoaded { return }
+        bundledDataLoaded = true
+        let (cat, enr) = await Task.detached(priority: .userInitiated) {
+            (CategoryCatalog.loadBundled(), EnrichmentCatalog.loadBundled())
+        }.value
+        categoryCatalog = cat
+        enrichment = enr
+        if !installed.isEmpty { categories = cat?.breakdown(installed: installed) ?? [] }
+        if let pkg = detailPackage, settings.aiFeaturesVisible {
+            detailEnrichment = enrichmentEntry(for: pkg.name)
+        }
+    }
+
     func loadCatalog() async {
         guard catalog.isEmpty, !catalogLoading else { return }
         catalogLoading = true
@@ -415,6 +433,11 @@ final class AppModel {
     var categories: [CategoryBreakdown] = []
     var runningServices = 0
     var dashboardLoaded = false
+    /// `brew outdated --json=v2` is slow (~4s) and `du -sk` can lag, so they no
+    /// longer gate first paint — they stream into their cards. These flags drive
+    /// the per-card placeholders while they're in flight.
+    var outdatedLoading = false
+    var storageLoading = false
 
     // ---- Services panel ----
     var services: [Service] = []
@@ -484,10 +507,14 @@ final class AppModel {
     var detailWatching: Bool?
     var githubStatus: GithubStatus?
 
-    // `var` (not `let`) so a live-fetched categories file can replace the
-    // bundled baseline when the user opts into live updates.
-    private var categoryCatalog = CategoryCatalog.loadBundled()
-    private let enrichment = EnrichmentCatalog.loadBundled()
+    // Parsed lazily off the main thread by `loadBundledData()` — NOT at init.
+    // categories.json (~800K) + enrichment.json (~2.7M, 15.7k entries) used to
+    // be synchronous stored-property inits that blocked first paint by seconds
+    // in debug. `var` so a live-fetched categories file can replace the bundle.
+    private var categoryCatalog: CategoryCatalog?
+    private var enrichment: EnrichmentCatalog?
+    /// True once the bundled catalogs finish parsing in the background.
+    private var bundledDataLoaded = false
     private let catalogService = CatalogService()
     private let iconService = IconService()
 
@@ -619,29 +646,52 @@ final class AppModel {
     /// Load all Dashboard stats. Reuses the Library load for the formula count
     /// (and triggers it if it hasn't run), then fans out the cheap counts.
     func loadDashboard() async {
-        if installed.isEmpty { await loadLibrary() } else { formulaCount = installed.lazy.filter { $0.kind == .formula }.count }
-        async let casks = try? brew.countCasks()
+        // Fast path — installed list + cheap (sub-second) counts. caskCount /
+        // formulaCount come from the installed list itself (loadLibrary already
+        // derives them), so no extra `brew list --cask` spawn.
+        if installed.isEmpty {
+            await loadLibrary()
+        } else {
+            formulaCount = installed.lazy.filter { $0.kind == .formula }.count
+            caskCount = installed.lazy.filter { $0.kind == .cask }.count
+        }
         async let leaves = try? brew.countLeaves()
         async let onRequest = try? brew.countOnRequest()
         async let pinned = try? brew.countPinned()
-        async let outdatedList = try? brew.outdatedPackages()
-        async let storageList = brew.storageBreakdown()
         async let ver = brew.version()
         async let pfx = brew.prefix()
         async let services = brew.countRunningServices()
 
-        caskCount = await casks ?? 0
         leavesCount = await leaves ?? 0
         onRequestCount = await onRequest ?? 0
         pinnedCount = await pinned ?? 0
-        outdated = await outdatedList ?? []
-        outdatedCount = outdated.count
-        storage = await storageList
         brewVersion = await ver
         brewPrefix = await pfx
-        categories = categoryCatalog?.breakdown(installed: installed) ?? []
         runningServices = await services
-        dashboardLoaded = true
+        categories = categoryCatalog?.breakdown(installed: installed) ?? []
+        dashboardLoaded = true   // paint NOW — don't wait on the slow ops below
+
+        // Slow ops stream into their cards (gated by `outdatedLoading` /
+        // `storageLoading`) instead of blocking the whole dashboard.
+        Task { await loadOutdated() }
+        Task { await loadStorage() }
+    }
+
+    /// `brew outdated --json=v2` (~4s) — runs after first paint; the Updates
+    /// tile/card show a "checking" state until it resolves.
+    func loadOutdated() async {
+        outdatedLoading = true
+        outdated = (try? await brew.outdatedPackages()) ?? []
+        outdatedCount = outdated.count
+        outdatedLoading = false
+    }
+
+    /// `du -sk` storage breakdown — runs after first paint; the Storage card
+    /// shows a measuring placeholder until it resolves.
+    func loadStorage() async {
+        storageLoading = true
+        storage = await brew.storageBreakdown()
+        storageLoading = false
     }
 
     /// Toolbar Refresh — reload whichever surface is showing.
@@ -811,18 +861,37 @@ final class AppModel {
         let stats = try? await githubService.repoStats(homepage: homepage)
         guard detailPackage?.id == pkgId else { return }
         detailRepoStats = stats
-        let status = await githubService.status()
+        let status = githubService.status()
+        let wasSignedIn = githubSignedIn
         githubStatus = status
         if status.signedIn {
             let starred = try? await githubService.isStarred(homepage: homepage)
             guard detailPackage?.id == pkgId else { return }
             detailStarred = starred
         }
+        // Creds are lazy — the user may have just become signed-in (keychain ACL
+        // allowed on this read, or a prior action signed them in). Populate the
+        // dashboard GitHub card + toolbar chip now that we know.
+        if status.signedIn && (!wasSignedIn || !githubStatsLoaded) {
+            await loadGithubStats()
+        }
     }
 
     // MARK: - GitHub actions (star / watch / file issue) + sign-in
 
     var githubSignedIn: Bool { githubStatus?.signedIn ?? false }
+    /// True when signed in AND the `public_repo` scope is present (authed actions
+    /// work). Drives the toolbar chip's green-vs-amber tint.
+    var githubScopeComplete: Bool { githubStatus?.scopes.contains("public_repo") ?? false }
+
+    // ---- Dashboard GitHub card (personal "starred N of M" stat) ----
+    var githubStarredCount = 0
+    var githubHomepageTotal = 0
+    var githubStatsLoading = false
+    var githubStatsLoaded = false
+    /// Card is shown only when signed in + GitHub allowed (toggle on, not paranoid).
+    var githubStatsEligible: Bool { githubSignedIn && settings.githubAllowed }
+
     /// Active device-flow prompt — drives the sign-in sheet. nil = not signing in.
     var deviceFlow: DeviceFlowStart?
     var githubSignInError: String?
@@ -868,6 +937,8 @@ final class AppModel {
             let status = try await githubService.pollDeviceFlow(deviceCode: flow.deviceCode, interval: flow.interval)
             deviceFlow = nil
             githubStatus = status
+            // Now signed in — light up the dashboard card + toolbar chip.
+            if status.signedIn { await loadGithubStats() }
             return status.signedIn
         } catch {
             githubSignInError = error.localizedDescription
@@ -965,6 +1036,47 @@ final class AppModel {
         let label = src.deletingPathExtension().lastPathComponent
         try await snapshotStore.importFile(from: src, label: label.isEmpty ? "imported" : label)
         await loadSnapshots()
+    }
+
+    /// Eagerly read GitHub sign-in status (Keychain) at launch so the toolbar's
+    /// Octocat chip can render. Signed-out users have no token → no Keychain ACL
+    /// prompt; only previously-signed-in users see the one-time prompt.
+    func loadGithubStatus() async {
+        githubStatus = githubService.status()
+        if !(githubStatus?.signedIn ?? false) {
+            // Signed out (or not yet) — reset card state so a later sign-in
+            // reloads fresh (the idempotent loadGithubStats keys off this).
+            githubStatsLoaded = false
+            githubStarredCount = 0
+            githubHomepageTotal = 0
+        }
+        await loadGithubStats()
+    }
+
+    /// Dashboard GitHub card: how many installed packages with a GitHub homepage
+    /// the signed-in user has starred. Mirrors the Tauri personal-stats card.
+    /// Homepages come from the bundled catalog's `homepage` field (native catalog
+    /// carries only the homepage, so this counts packages whose *homepage* is on
+    /// GitHub — a subset of Tauri's url-resolved set, but no extra brew calls).
+    func loadGithubStats() async {
+        guard githubStatsEligible, !githubStatsLoading, !githubStatsLoaded else { return }
+        if installed.isEmpty { await loadLibrary() }
+        if catalog.isEmpty { await loadCatalog() }
+        // Resolve each installed package to its canonical GitHub URL (homepage
+        // OR source URL), de-duplicated. Mirrors Tauri's githubHomepage set.
+        var seen = Set<String>()
+        let homepages: [String] = installed.compactMap { pkg in
+            guard let gh = catalogLookup(pkg.name, pkg.kind)?.githubHomepage,
+                  seen.insert(gh).inserted else { return nil }
+            return gh
+        }
+        githubHomepageTotal = homepages.count
+        guard !homepages.isEmpty else { githubStatsLoaded = true; return }
+        githubStatsLoading = true
+        let results = await githubService.batchIsStarred(homepages)
+        githubStarredCount = results.values.filter { $0 }.count
+        githubStatsLoading = false
+        githubStatsLoaded = true
     }
 
     // MARK: - Services

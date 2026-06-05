@@ -147,7 +147,7 @@ public enum GithubError: Error, Sendable, Equatable {
 
 /// Actor wrapping the GitHub integration. All mutable interaction with
 /// the Keychain + network is serialized through the actor.
-public actor GitHubService {
+public struct GitHubService: Sendable {
 
     // MARK: Constants (mirrored from the Rust source)
 
@@ -160,6 +160,12 @@ public actor GitHubService {
     private static let accountToken = "github_access_token"        // KEYCHAIN_ACCOUNT_TOKEN
     private static let accountScopes = "github_access_token_scopes" // KEYCHAIN_ACCOUNT_SCOPES
     private static let accountUsername = "github_username"          // KEYCHAIN_ACCOUNT_USERNAME
+    /// Combined credential item (token + username + scopes as one JSON blob).
+    /// ONE Keychain item = ONE access = ONE prompt, in dev AND prod — the legacy
+    /// three-item layout above needs three single-item reads (three prompts) in
+    /// dev, because a `kSecMatchLimitAll` batch silently skips consent-required
+    /// items instead of prompting. Reads migrate the legacy items into this.
+    private static let accountCredential = "github_credential_v1"
 
     /// OAuth Device Flow client identifier. Public per RFC 8628 §3.1.
     /// Verbatim from `auth.rs:93` (`GITHUB_OAUTH_CLIENT_ID`).
@@ -213,22 +219,17 @@ public actor GitHubService {
     /// network. Mirrors `auth::status` / `status_with` (`auth.rs:324-348`)
     /// and the `github_status` command (`github.rs:96-101`).
     public func status() -> GithubStatus {
-        // Single batch Keychain read for all three accounts (token / username /
-        // scopes) instead of three separate SecItemCopyMatching calls — each
-        // call is its own Keychain access and prompts separately, so reading
-        // them one-by-one triggered three consecutive prompts at launch. One
-        // query for the whole service = one access. No schema change.
-        let all = Self.keychainReadAll()
-        guard all[Self.accountToken] != nil else { return .signedOut }
-        let username = all[Self.accountUsername]
-        let scopes = Self.decodeScopes(all[Self.accountScopes])
-        return GithubStatus(signedIn: true, username: username, scopes: scopes)
+        // One Keychain access (the combined credential item) = one prompt.
+        guard let cred = Self.readCredential() else { return .signedOut }
+        return GithubStatus(signedIn: true, username: cred.username, scopes: cred.scopes)
     }
 
     /// Delete every stored credential. Idempotent. Mirrors
     /// `auth::signout` / `signout_with` (`auth.rs:393-403`) and the
     /// `github_signout` command (`github.rs:131-136`).
     public func signOut() {
+        Self.keychainDelete(account: Self.accountCredential)
+        // Clean up any legacy three-item layout too.
         Self.keychainDelete(account: Self.accountToken)
         Self.keychainDelete(account: Self.accountUsername)
         Self.keychainDelete(account: Self.accountScopes)
@@ -311,12 +312,9 @@ public actor GitHubService {
                 // Resolve username for display (non-fatal; `auth.rs:572-579`).
                 let username = try? await fetchUsername(token: accessToken)
 
-                // Persist to Keychain — no disk fallback (`auth.rs:580-588`).
-                Self.keychainWrite(account: Self.accountToken, value: accessToken)
-                if let username { Self.keychainWrite(account: Self.accountUsername, value: username) }
-                if let scopesJSON = Self.encodeScopes(scopes) {
-                    Self.keychainWrite(account: Self.accountScopes, value: scopesJSON)
-                }
+                // Persist to Keychain as the single combined item — no disk
+                // fallback (`auth.rs:580-588`).
+                Self.writeCredential(token: accessToken, username: username, scopes: scopes)
                 return GithubStatus(signedIn: true, username: username, scopes: scopes)
             }
 
@@ -364,7 +362,7 @@ public actor GitHubService {
 
     public func repoStats(homepage: String) async throws -> RepoStats? {
         guard let repo = Self.parseGithubURL(homepage) else { return nil }
-        let token = Self.keychainRead(account: Self.accountToken)
+        let token = Self.readCredential()?.token
 
         let url = "\(Self.apiBase)/repos/\(repo.owner)/\(repo.repo)"
         let (data, http) = try await get(urlString: url, token: token)
@@ -420,6 +418,29 @@ public actor GitHubService {
         case 403: throw Self.rateLimitedOrHTTP(http)
         default: throw GithubError.http(http.statusCode)
         }
+    }
+
+    /// Star-status for many homepages → `homepage: isStarred`. Soft-fails per
+    /// entry (errors omitted). Powers the dashboard "starred N of M" card.
+    /// Bounded-concurrency fan-out (GitHubService is a value type, so these run
+    /// in parallel) — keeps the dashboard card responsive over ~200 packages.
+    public func batchIsStarred(_ homepages: [String]) async -> [String: Bool] {
+        let limit = 12
+        var out: [String: Bool] = [:]
+        await withTaskGroup(of: (String, Bool)?.self) { group in
+            var i = 0
+            func spawnNext() {
+                guard i < homepages.count else { return }
+                let hp = homepages[i]; i += 1
+                group.addTask { (try? await self.isStarred(homepage: hp)).map { (hp, $0) } }
+            }
+            for _ in 0..<min(limit, homepages.count) { spawnNext() }
+            while let res = await group.next() {
+                if let (hp, starred) = res { out[hp] = starred }
+                spawnNext()
+            }
+        }
+        return out
     }
 
     /// Star (PUT) or unstar (DELETE) `/user/starred/{owner}/{repo}`.
@@ -517,16 +538,15 @@ public actor GitHubService {
         guard let repo = Self.parseGithubURL(homepage) else {
             throw GithubError.notAGithubURL
         }
-        // Auth gate (`github.rs:185`).
-        guard let token = Self.keychainRead(account: Self.accountToken), !token.isEmpty else {
+        // Auth + scope gate from the single combined credential read
+        // (`github.rs:185-194`) — one Keychain access.
+        guard let cred = Self.readCredential(), !cred.token.isEmpty else {
             throw GithubError.authRequired
         }
-        // Scope gate, read from the cached Keychain blob (`github.rs:189-194`).
-        let scopes = Self.decodeScopes(Self.keychainRead(account: Self.accountScopes))
-        guard scopes.contains(requiredScope) else {
+        guard cred.scopes.contains(requiredScope) else {
             throw GithubError.scopeRequired(requiredScope)
         }
-        return (repo, token)
+        return (repo, cred.token)
     }
 
     // MARK: - Latest release helper
@@ -887,31 +907,33 @@ public actor GitHubService {
         return value
     }
 
-    /// Read every generic-password value stored under `keychainService` in a
-    /// SINGLE `SecItemCopyMatching` (one Keychain access, hence one auth prompt)
-    /// and return them keyed by account. Used by `status()` so the common
-    /// "am I signed in + who + what scopes" check costs one prompt, not three.
-    private static func keychainReadAll() -> [String: String] {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecReturnAttributes as String: true,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-        ]
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let items = result as? [[String: Any]] else {
-            return [:]
+    /// Read the combined credential item (token + username + scopes) — ONE
+    /// Keychain access = ONE prompt. If it's absent but the legacy three-item
+    /// layout exists, migrate it into the combined item (that one-time migration
+    /// reads the three old items, then never again). Returns nil when signed out.
+    private static func readCredential() -> (token: String, username: String?, scopes: [String])? {
+        if let raw = keychainRead(account: accountCredential),
+           let data = raw.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let token = obj["token"] as? String, !token.isEmpty {
+            return (token, obj["username"] as? String, (obj["scopes"] as? [String]) ?? [])
         }
-        var out: [String: String] = [:]
-        for item in items {
-            guard let account = item[kSecAttrAccount as String] as? String,
-                  let data = item[kSecValueData as String] as? Data,
-                  let value = String(data: data, encoding: .utf8) else { continue }
-            out[account] = value
-        }
-        return out
+        // Legacy three-item layout → migrate into the combined item.
+        guard let token = keychainRead(account: accountToken), !token.isEmpty else { return nil }
+        let username = keychainRead(account: accountUsername)
+        let scopes = decodeScopes(keychainRead(account: accountScopes))
+        writeCredential(token: token, username: username, scopes: scopes)
+        return (token, username, scopes)
+    }
+
+    /// Persist the combined credential item (token + username + scopes) as one
+    /// JSON blob — one Keychain item so every later read is a single prompt.
+    private static func writeCredential(token: String, username: String?, scopes: [String]) {
+        var obj: [String: Any] = ["token": token, "scopes": scopes]
+        if let username { obj["username"] = username }
+        guard let data = try? JSONSerialization.data(withJSONObject: obj),
+              let json = String(data: data, encoding: .utf8) else { return }
+        _ = keychainWrite(account: accountCredential, value: json)
     }
 
     /// Upsert a generic-password value. Equivalent to

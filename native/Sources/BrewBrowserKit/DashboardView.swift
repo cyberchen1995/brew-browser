@@ -46,6 +46,8 @@ struct DashboardView: View {
                         if !model.categories.isEmpty { CategoriesCard(model: model) }
                     }
 
+                    if model.githubStatsEligible { GitHubCard(model: model) }
+
                     StorageCard(model: model)
                 }
                 .padding(20)
@@ -80,11 +82,11 @@ struct HeroStrip: View {
                 model.openLibrary()
             }
             StatTile(
-                value: model.outdatedCount == 0 ? "All current" : "\(model.outdatedCount)",
-                label: model.outdatedCount == 0 ? "" : "updates available",
+                value: model.outdatedLoading ? "…" : (model.outdatedCount == 0 ? "All current" : "\(model.outdatedCount)"),
+                label: model.outdatedLoading ? "checking updates" : (model.outdatedCount == 0 ? "" : "updates available"),
                 symbol: "arrow.up.circle"
             ) { if model.outdatedCount > 0 { model.openOutdatedInLibrary() } }
-            .disabled(model.outdatedCount == 0)
+            .disabled(model.outdatedLoading || model.outdatedCount == 0)
 
             StatTile(value: model.brewVersion, label: model.brewPrefix, symbol: "internaldrive", monospaceValue: true, action: nil)
         }
@@ -423,6 +425,14 @@ struct StorageCard: View {
                 }
                 .padding(.bottom, 8)
 
+                if model.storage.isEmpty && model.storageLoading {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Measuring disk usage…").font(.callout).foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.vertical, 7)
+                }
                 ForEach(model.storage) { item in
                     HStack(spacing: 12) {
                         Text(item.label).frame(width: 160, alignment: .leading)
@@ -442,6 +452,52 @@ struct StorageCard: View {
                     if item.id != model.storage.last?.id { Divider() }
                 }
             }
+            .padding(.top, 2)
+        }
+    }
+}
+
+/// GitHub personal-stats card — "you've starred N of M installed packages with
+/// GitHub homepages." Parity with the Tauri Dashboard card. Only shown when
+/// signed in + GitHub allowed (gated by the parent on `githubStatsEligible`).
+struct GitHubCard: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Label { Text("GitHub").font(.headline) } icon: { GithubMarkIcon(size: 15) }
+                    Spacer()
+                    if let user = model.githubStatus?.username {
+                        Text("@\(user)").font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.bottom, 10)
+
+                if model.githubStatsLoaded && model.githubHomepageTotal == 0 {
+                    Text("None of your installed packages have a GitHub homepage.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if !model.githubStatsLoaded {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(model.githubHomepageTotal > 0
+                            ? "Checking which of your \(model.githubHomepageTotal) packages you've starred…"
+                            : "Checking your starred packages…")
+                            .font(.callout).foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        Image(systemName: "star.fill").foregroundStyle(.yellow)
+                        Text("You've starred **\(model.githubStarredCount)** of **\(model.githubHomepageTotal)** installed packages with GitHub homepages.")
+                            .font(.callout)
+                        Spacer()
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 2)
         }
     }

@@ -15,6 +15,31 @@ struct CatalogPackage: Identifiable, Hashable, Sendable {
     let homepage: String
     let version: String
     let kind: InstalledPackage.Kind
+    /// Canonical `https://github.com/<owner>/<repo>` resolved from the homepage
+    /// OR the source URL (`urls.stable.url` / cask `url`) — many GitHub-hosted
+    /// packages have a non-GitHub marketing homepage. nil when neither is GitHub.
+    /// Mirrors the Tauri `githubHomepage` resolution. Default nil for previews.
+    var githubHomepage: String? = nil
+}
+
+/// Canonicalize any URL containing `github.com/<owner>/<repo>` to
+/// `https://github.com/<owner>/<repo>`, or nil. Free function so both loaders
+/// and tests can use it.
+func resolveGithubHomepage(homepage: String, source: String?) -> String? {
+    if let g = canonicalGithubURL(homepage) { return g }
+    if let source, let g = canonicalGithubURL(source) { return g }
+    return nil
+}
+
+private func canonicalGithubURL(_ url: String) -> String? {
+    guard let r = url.range(of: "github.com/") else { return nil }
+    let parts = url[r.upperBound...].split(separator: "/", omittingEmptySubsequences: true)
+    guard parts.count >= 2 else { return nil }
+    let owner = parts[0].prefix { $0 != "?" && $0 != "#" }
+    var repo = parts[1].prefix { $0 != "?" && $0 != "#" }
+    if repo.hasSuffix(".git") { repo = repo.dropLast(4) }
+    guard !owner.isEmpty, !repo.isEmpty else { return nil }
+    return "https://github.com/\(owner)/\(repo)"
 }
 
 /// Loads + decompresses the bundled catalog once, off the main actor, and
@@ -46,13 +71,16 @@ actor CatalogService {
         return arr.compactMap { obj in
             guard let name = obj["name"] as? String else { return nil }
             let version = ((obj["versions"] as? [String: Any])?["stable"] as? String) ?? "—"
+            let homepage = obj["homepage"] as? String ?? ""
+            let source = ((obj["urls"] as? [String: Any])?["stable"] as? [String: Any])?["url"] as? String
             return CatalogPackage(
                 token: name,
                 displayName: name,                       // formulae have no separate display name
                 desc: obj["desc"] as? String ?? "",
-                homepage: obj["homepage"] as? String ?? "",
+                homepage: homepage,
                 version: version,
-                kind: .formula
+                kind: .formula,
+                githubHomepage: resolveGithubHomepage(homepage: homepage, source: source)
             )
         }
     }
@@ -63,13 +91,16 @@ actor CatalogService {
             guard let token = obj["token"] as? String else { return nil }
             // cask `name` is an array of human names; first is the primary.
             let display = (obj["name"] as? [String])?.first ?? token
+            let homepage = obj["homepage"] as? String ?? ""
+            let source = obj["url"] as? String
             return CatalogPackage(
                 token: token,
                 displayName: display,
                 desc: obj["desc"] as? String ?? "",
-                homepage: obj["homepage"] as? String ?? "",
+                homepage: homepage,
                 version: obj["version"] as? String ?? "—",
-                kind: .cask
+                kind: .cask,
+                githubHomepage: resolveGithubHomepage(homepage: homepage, source: source)
             )
         }
     }

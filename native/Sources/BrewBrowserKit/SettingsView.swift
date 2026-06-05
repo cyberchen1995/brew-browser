@@ -11,29 +11,37 @@ import SwiftUI
 /// Native Settings — stock `TabView` with the default top tab bar. This is the
 /// canonical SwiftUI macOS preferences shape; we tried sidebar variants and the
 /// default is cleaner and simpler. Opened by ⌘, and the toolbar gear.
+/// Settings tabs, shared so other surfaces (e.g. the toolbar Octocat) can open
+/// Settings to a specific pane via the `SettingsTab.deepLink` AppStorage key.
+public enum SettingsTab: String { case appearance, network, github, brew, updates, security, trending, activity, about }
+
 public struct SettingsView: View {
+    /// Persisted selection — also the deep-link target: writing this key before
+    /// `openSettings()` makes Settings open to that pane.
+    @AppStorage("settings.selectedTab") private var selected = SettingsTab.appearance.rawValue
+
     public init() {}
 
     public var body: some View {
-        TabView {
+        TabView(selection: $selected) {
             AppearanceSettings()
-                .tabItem { Label("Appearance", systemImage: "paintbrush") }
+                .tabItem { Label("Appearance", systemImage: "paintbrush") }.tag(SettingsTab.appearance.rawValue)
             NetworkSettings()
-                .tabItem { Label("Network", systemImage: "globe") }
+                .tabItem { Label("Network", systemImage: "globe") }.tag(SettingsTab.network.rawValue)
             GitHubSettings()
-                .tabItem { Label("GitHub", systemImage: "chevron.left.forwardslash.chevron.right") }
+                .tabItem { Label("GitHub", systemImage: "chevron.left.forwardslash.chevron.right") }.tag(SettingsTab.github.rawValue)
             BrewSettings()
-                .tabItem { Label("Brew", systemImage: "mug") }
+                .tabItem { Label("Brew", systemImage: "mug") }.tag(SettingsTab.brew.rawValue)
             UpdatesSettings()
-                .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
+                .tabItem { Label("Updates", systemImage: "arrow.down.circle") }.tag(SettingsTab.updates.rawValue)
             VulnerabilitySettings()
-                .tabItem { Label("Security", systemImage: "shield") }
+                .tabItem { Label("Security", systemImage: "shield") }.tag(SettingsTab.security.rawValue)
             TrendingSettings()
-                .tabItem { Label("Trending", systemImage: "chart.line.uptrend.xyaxis") }
+                .tabItem { Label("Trending", systemImage: "chart.line.uptrend.xyaxis") }.tag(SettingsTab.trending.rawValue)
             ActivitySettings()
-                .tabItem { Label("Activity", systemImage: "list.bullet.rectangle") }
+                .tabItem { Label("Activity", systemImage: "list.bullet.rectangle") }.tag(SettingsTab.activity.rawValue)
             AboutSettings()
-                .tabItem { Label("About", systemImage: "info.circle") }
+                .tabItem { Label("About", systemImage: "info.circle") }.tag(SettingsTab.about.rawValue)
         }
         .frame(width: 560, height: 480)
     }
@@ -172,8 +180,8 @@ private struct GitHubSettings: View {
                     }
                     Button("Sign out") {
                         Task {
-                            await github.signOut()
-                            self.status = await github.status()
+                            github.signOut()
+                            self.status = github.status()
                         }
                     }
                 } else if let flow {
@@ -204,7 +212,7 @@ private struct GitHubSettings: View {
         }
         .formStyle(.grouped)
         .padding(20)
-        .task { status = await github.status() }
+        .task { status = github.status() }
     }
 
     private func startSignIn() async {

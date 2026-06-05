@@ -18,6 +18,8 @@ public func applyDockIcon() {
 /// touch the window, tint, transparency, or title bar.
 public struct ContentView: View {
     @State private var model = AppModel()
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.scenePhase) private var scenePhase
 
     public init() {}
 
@@ -33,6 +35,17 @@ public struct ContentView: View {
             // The inspector belongs to the section that opened it — navigating
             // to a different section dismisses it.
             .onChange(of: model.selection) { model.closeDetailIfSectionChanged() }
+            // Parse the bundled categories/enrichment JSON in the background at
+            // launch so the heavy decode never blocks first paint.
+            .task { await model.loadBundledData() }
+            // Eagerly read GitHub status so the toolbar Octocat chip can render.
+            .task { await model.loadGithubStatus() }
+            // Creds are lazy — re-read status when the window becomes active
+            // again (e.g. after signing in via Settings) so the chip + dashboard
+            // card light up without a manual refresh.
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { Task { await model.loadGithubStatus() } }
+            }
             // Wider sidebar so section labels + count badges never crowd, and
             // there's room for the toolbar's icon+text mode without overflow.
             .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 300)
@@ -65,10 +78,32 @@ public struct ContentView: View {
                         }
                         .disabled(model.isLoading)
 
+                        // Donate — opens the project's GitHub Sponsors page.
                         Button {
-                            // Install new package — wired in full port.
+                            if let url = URL(string: "https://github.com/sponsors/msitarzewski") {
+                                NSWorkspace.shared.open(url)
+                            }
                         } label: {
-                            Label("Add", systemImage: "plus")
+                            Image(systemName: "heart.fill")
+                                .foregroundStyle(.pink)
+                        }
+                        .help("Support brew-browser via GitHub Sponsors")
+
+                        // GitHub connection chip — only when signed in. Green when
+                        // the public_repo scope is present (star/watch/issue work),
+                        // amber when the scope is incomplete. Opens Settings.
+                        if model.githubSignedIn {
+                            Button {
+                                // Deep-link Settings to the GitHub pane.
+                                UserDefaults.standard.set(SettingsTab.github.rawValue, forKey: "settings.selectedTab")
+                                openSettings()
+                            } label: {
+                                GithubMarkIcon(size: 15)
+                                    .foregroundStyle(model.githubScopeComplete ? Color.green : Color.orange)
+                            }
+                            .help(model.githubScopeComplete
+                                ? "GitHub: connected as @\(model.githubStatus?.username ?? "user")"
+                                : "GitHub: signed in — scope incomplete; open Settings to fix")
                         }
 
                         // Stock SettingsLink opens the native Settings scene.
@@ -160,8 +195,6 @@ public struct ContentView: View {
             SnapshotsView(model: model)
         case .services:
             ServicesView(model: model)
-        default:
-            PlaceholderView(section: model.selection)
         }
     }
 }
