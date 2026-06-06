@@ -770,6 +770,11 @@ public final class AppModel {
     /// package with a given name is unambiguous in our flat list). Entries with
     /// `total == 0` are scanned-but-clean; absence means not-yet-scanned.
     var vulnIndex: [String: VulnSummary] = [:]
+    /// name → full findings from the last install-wide scan. The Security card
+    /// in the detail inspector reads THIS cache (instant) instead of re-running a
+    /// scan per package — `brew vulns` can only scan the whole install, so a
+    /// per-package re-check is really a full re-scan. Persisted with the index.
+    var vulnFindings: [String: [VulnFinding]] = [:]
     /// True while a full install-wide scan is in flight (Exposure "Scan now").
     var vulnScanAllLoading = false
     /// Timestamp of the most recent successful install-wide scan, or nil before
@@ -1111,8 +1116,9 @@ public final class AppModel {
         detailLoading = true
         detailError = nil
         detailInfo = nil
-        detailVulns = []
-        detailVulnsScanned = false
+        // Show this package's vulns straight from the cached install-wide scan
+        // (instant, no per-package subprocess).
+        loadDetailVulnsFromCache()
         detailTrend = nil
         detailRepoStats = nil
         detailStarred = nil
@@ -1345,19 +1351,32 @@ public final class AppModel {
     func cancelGitHubSignIn() { deviceFlow = nil }
 
     /// Run a `brew vulns` scan for the detail package (Security card "Check now").
+    /// Populate the detail Security card from the cached install-wide scan —
+    /// instant, no subprocess. Called when the inspector opens. Leaves the card
+    /// in its "not scanned" state if no scan has run yet.
+    func loadDetailVulnsFromCache() {
+        guard let pkg = detailPackage else { return }
+        if vulnLastScannedAt != nil {
+            detailVulns = vulnFindings[pkg.name] ?? []
+            detailVulnsScanned = true
+        } else {
+            detailVulns = []
+            detailVulnsScanned = false
+        }
+    }
+
+    /// The Security card's scan action. There's no single-package scan —
+    /// `brew vulns` only scans the whole install — so this runs the full
+    /// system scan (and the card's copy says so), then reads this package's
+    /// findings back out of the refreshed cache.
     func scanDetailVulns() async {
         guard let pkg = detailPackage else { return }
         detailVulnsLoading = true
-        let findings = (try? await vulns.scanOne(name: pkg.name, isCask: pkg.kind == .cask)) ?? []
+        await scanAllVulns()
         guard detailPackage?.id == pkg.id else { return }
-        detailVulns = findings
-        detailVulnsScanned = true
+        detailVulns = vulnFindings[pkg.name] ?? []
+        detailVulnsScanned = vulnLastScannedAt != nil
         detailVulnsLoading = false
-        // Fold the result into the install-wide index so the Library dot,
-        // sidebar badge, and Exposure card reflect a single-package re-check
-        // without a full re-scan (mirrors the Tauri store's scanOne updating
-        // the shared `records` Map).
-        vulnIndex[pkg.name] = VulnSummary.from(findings)
     }
 
     /// Lazy first scan on first interest — called when a vuln-surfacing view
@@ -1405,11 +1424,12 @@ public final class AppModel {
         // smaller set) and was ~331× slower. Run off the main actor so the
         // blocking subprocess I/O doesn't freeze the UI.
         let service = vulns
-        guard let index = try? await Task.detached(priority: .utility, operation: {
+        guard let findings = try? await Task.detached(priority: .utility, operation: {
             try await service.scanAll()
         }).value else { return }
-        // Replace wholesale so an uninstalled package drops out of the index.
-        vulnIndex = index
+        // Replace wholesale so an uninstalled package drops out of the caches.
+        vulnFindings = findings
+        vulnIndex = findings.mapValues { VulnSummary.from($0) }
         vulnLastScannedAt = Date()
         // Persist so the result survives relaunch — the Exposure card shows the
         // last scan instantly instead of re-scanning at every launch.
@@ -1418,13 +1438,15 @@ public final class AppModel {
 
     // MARK: - Vulnerability persistence (UserDefaults)
 
-    private static let vulnIndexKey = "vuln.index.v1"
+    private static let vulnFindingsKey = "vuln.findings.v1"
     private static let vulnScannedAtKey = "vuln.scannedAt.v1"
 
-    /// Persist the install-wide scan rollup + timestamp. Best-effort.
+    /// Persist the full per-package findings + timestamp. Best-effort. The detail
+    /// card reads these back after relaunch with no re-scan; the summary index is
+    /// derived from them on load.
     private func persistVulns() {
-        if let data = try? JSONEncoder().encode(vulnIndex) {
-            UserDefaults.standard.set(data, forKey: Self.vulnIndexKey)
+        if let data = try? JSONEncoder().encode(vulnFindings) {
+            UserDefaults.standard.set(data, forKey: Self.vulnFindingsKey)
         }
         if let at = vulnLastScannedAt {
             UserDefaults.standard.set(at.timeIntervalSince1970, forKey: Self.vulnScannedAtKey)
@@ -1432,12 +1454,14 @@ public final class AppModel {
     }
 
     /// Load the last persisted scan at launch so the Exposure card + Library
-    /// dots show immediately without re-scanning. `scanVulnsIfNeeded` then no-ops
-    /// (lastScannedAt is set); a fresh scan only happens on explicit "Scan now".
+    /// dots + detail Security card show immediately without re-scanning.
+    /// `scanVulnsIfNeeded` then no-ops (lastScannedAt is set); a fresh scan only
+    /// happens on explicit "Scan now".
     func loadVulns() {
-        if let data = UserDefaults.standard.data(forKey: Self.vulnIndexKey),
-           let idx = try? JSONDecoder().decode([String: VulnSummary].self, from: data) {
-            vulnIndex = idx
+        if let data = UserDefaults.standard.data(forKey: Self.vulnFindingsKey),
+           let findings = try? JSONDecoder().decode([String: [VulnFinding]].self, from: data) {
+            vulnFindings = findings
+            vulnIndex = findings.mapValues { VulnSummary.from($0) }
         }
         let ts = UserDefaults.standard.double(forKey: Self.vulnScannedAtKey)
         if ts > 0 { vulnLastScannedAt = Date(timeIntervalSince1970: ts) }

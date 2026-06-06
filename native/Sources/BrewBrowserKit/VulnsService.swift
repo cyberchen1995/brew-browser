@@ -60,7 +60,7 @@ enum VulnSeverity: String, Sendable, Comparable, Codable {
 /// wire format is normalized into this at the parse boundary (see
 /// ``VulnsService`` decoding). Mirrors the Rust `RawVuln` post-mapping
 /// shape (camelCase, scalar `fixedIn`, lowercased severity).
-struct VulnFinding: Identifiable, Sendable, Hashable {
+struct VulnFinding: Identifiable, Sendable, Hashable, Codable {
     /// Stable identity for SwiftUI lists. The CVE/GHSA/OSV id when the
     /// upstream entry has one; otherwise a synthesized fallback so a
     /// rare id-less entry still renders distinctly instead of colliding.
@@ -268,15 +268,17 @@ struct VulnsService: Sendable {
     /// force-scanning every installed formula (deps included) one at a time,
     /// which both over-reports and is ~331× slower. Returns name → per-package
     /// rollup for packages brew-vulns reported on.
-    func scanAll() async throws -> [String: VulnSummary] {
+    func scanAll() async throws -> [String: [VulnFinding]] {
         let result = try run(["vulns", "--quiet", "--json"])
         // Same exit-1-is-findings convention as scanOne (GOTCHA #1).
         guard result.exitCode == 0 || result.exitCode == 1 else {
             throw VulnsServiceError.scanFailed(code: result.exitCode, stderr: result.stderr)
         }
-        var out: [String: VulnSummary] = [:]
+        // Per-package findings — the detail card reads this cache so it never has
+        // to re-run a (whole-install) scan just to show one package.
+        var out: [String: [VulnFinding]] = [:]
         for record in try Self.parseScanOutput(result.stdout) where !record.formula.isEmpty {
-            out[record.formula] = VulnSummary.from(record.findings)
+            out[record.formula] = record.findings
         }
         return out
     }

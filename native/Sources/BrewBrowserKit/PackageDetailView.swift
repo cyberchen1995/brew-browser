@@ -267,14 +267,15 @@ struct PackageDetailView: View {
                     Text("Install `brew vulns` to scan this package for known vulnerabilities.")
                         .font(.callout).foregroundStyle(.secondary)
                 } else if model.detailVulnsLoading {
-                    ProgressView("Scanning…")
+                    ProgressView("Scanning all packages…")
                 } else if !model.detailVulnsScanned {
-                    Text("Check this package for known vulnerabilities.")
+                    Text("This package hasn't been scanned yet. Scanning checks **every** installed package — `brew vulns` can't scan just one.")
                         .font(.callout).foregroundStyle(.secondary)
-                    Button("Check now") { Task { await model.scanDetailVulns() } }
+                    Button("Scan all packages") { Task { await model.scanDetailVulns() } }
                 } else if model.detailVulns.isEmpty {
                     Label("No known vulnerabilities", systemImage: "checkmark.seal.fill")
                         .foregroundStyle(.green)
+                    rescanRow
                 } else {
                     // No "Upgrade to fix" here — it duplicates the footer's
                     // Upgrade CTA (a fixable advisory means the package is
@@ -312,6 +313,7 @@ struct PackageDetailView: View {
                         }
                         .padding(.vertical, 4)
                     }
+                    rescanRow
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -319,6 +321,23 @@ struct PackageDetailView: View {
         } label: {
             Label("Security", systemImage: "shield")
         }
+    }
+
+    /// "Re-scan all" — these results come from the cached install-wide scan, so
+    /// re-checking is a full system re-scan (not just this package). The caption
+    /// makes that explicit.
+    @ViewBuilder private var rescanRow: some View {
+        HStack(spacing: 8) {
+            Button("Re-scan all") { Task { await model.scanDetailVulns() } }
+                .controlSize(.small)
+            if let at = model.vulnLastScannedAt {
+                Text("Last scan: \(at.formatted(.relative(presentation: .named)))")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.top, 2)
+        .help("Runs brew vulns across your whole install — it can't scan a single package")
     }
 
     // MARK: service
