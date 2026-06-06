@@ -48,6 +48,30 @@ enum ReportIssue {
         case tags = "Tags"
         case useCases = "Why install this?"
         case similar = "Similar packages"
+
+        /// Bold heading for the field's InfoButton popover (mirrors Tauri).
+        var infoTitle: String {
+            switch self {
+            case .summary:    return "About this summary"
+            case .categories: return "About categories"
+            case .tags:       return "About tags"
+            case .useCases:   return "About use cases"
+            case .similar:    return "About similar packages"
+            }
+        }
+
+        /// Provenance copy for the InfoButton popover — verbatim from the Tauri
+        /// `InfoButton` bodies, with the field-specific tail.
+        var infoBody: String {
+            let base = "Generated offline at build time by Claude Haiku 4.5 — no network or LLM calls happen while you use brew-browser. Open an issue if "
+            switch self {
+            case .summary:    return base + "the summary looks off and we'll fix it in the next release."
+            case .categories: return base + "a category looks off and we'll fix it in the next release."
+            case .tags:       return base + "a tag looks off and we'll fix it in the next release."
+            case .useCases:   return base + "these use cases look off and we'll fix them in the next release."
+            case .similar:    return base + "these suggestions look off and we'll fix them in the next release."
+            }
+        }
     }
 
     /// Build a pre-filled brew-browser new-issue URL reporting a wrong enriched

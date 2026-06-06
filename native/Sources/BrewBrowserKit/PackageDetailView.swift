@@ -245,17 +245,17 @@ struct PackageDetailView: View {
     /// `ReportIssue` — the deeplink correction path. Enrichment corrections go to
     /// the brew-browser repo (not the package's own repo), so this reuses the
     /// job/enrichment issue builder rather than the package File-issue sheet.
+    /// (i) InfoButton for an enriched field — a popover explaining how the field
+    /// was generated + a "Report an issue on GitHub" button. Replaces the old
+    /// "Wrong?" link; mirrors the Tauri `InfoButton`.
     private func wrongButton(_ field: ReportIssue.EnrichmentField, currentValue: String) -> some View {
-        Button {
+        InfoButton(
+            title: field.infoTitle,
+            message: field.infoBody,
+            label: field.infoTitle
+        ) {
             ReportIssue.openEnrichmentCorrection(token: pkg.name, field: field, currentValue: currentValue)
-        } label: {
-            Label("Wrong?", systemImage: "exclamationmark.bubble")
-                .font(.caption2)
-                .labelStyle(.titleAndIcon)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .help("Report a correction for this package's \(field.rawValue.lowercased())")
     }
 
     // MARK: security
