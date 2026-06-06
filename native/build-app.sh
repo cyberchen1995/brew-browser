@@ -114,5 +114,31 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+# Ad-hoc re-sign LAST. Adding the Frameworks rpath with install_name_tool (above)
+# invalidates the linker's ad-hoc signature on the main binary, and Apple Silicon
+# refuses to launch a binary whose signature doesn't match — so the assembled app
+# crashes immediately at launch unless we re-seal it. Sign inside-out (nested
+# Sparkle code → framework → app) with the ad-hoc identity ("-") so the dev .app
+# launches. A notarized release re-signs with a Developer ID after assembly.
+echo "==> ad-hoc re-sign (install_name_tool invalidated the linker signature)"
+FW="$APP/Contents/Frameworks/Sparkle.framework"
+if [ -d "$FW" ]; then
+  # Sparkle ships nested code (XPC services, Updater.app, Autoupdate) that must be
+  # signed before the framework that contains them.
+  find "$FW" -type d \( -name "*.xpc" -o -name "*.app" \) -print0 2>/dev/null \
+    | xargs -0 -I{} codesign --force --sign - --timestamp=none "{}" 2>/dev/null || true
+  if [ -f "$FW/Versions/Current/Autoupdate" ]; then
+    codesign --force --sign - --timestamp=none "$FW/Versions/Current/Autoupdate" 2>/dev/null || true
+  fi
+  codesign --force --sign - --timestamp=none "$FW" 2>/dev/null || true
+fi
+# Sign the resource bundles, then the app itself (outermost last).
+for b in "$APP"/Contents/Resources/*.bundle; do
+  [ -e "$b" ] || continue
+  codesign --force --sign - --timestamp=none "$b" 2>/dev/null || true
+done
+codesign --force --sign - --timestamp=none "$APP"
+codesign --verify --verbose=2 "$APP" 2>&1 | tail -1 || true
+
 echo "==> done: $APP"
 echo "Launch with: open \"$APP\""
