@@ -259,6 +259,25 @@ struct VulnsService: Sendable {
         return records.flatMap { $0.findings }
     }
 
+    /// Scan the WHOLE install set in ONE `brew vulns --json` call (no
+    /// `--formula`), exactly like the Tauri `scan_all`. This matches Tauri's
+    /// result set — letting brew-vulns pick which packages to scan — instead of
+    /// force-scanning every installed formula (deps included) one at a time,
+    /// which both over-reports and is ~331× slower. Returns name → per-package
+    /// rollup for packages brew-vulns reported on.
+    func scanAll() async throws -> [String: VulnSummary] {
+        let result = try run(["vulns", "--quiet", "--json"])
+        // Same exit-1-is-findings convention as scanOne (GOTCHA #1).
+        guard result.exitCode == 0 || result.exitCode == 1 else {
+            throw VulnsServiceError.scanFailed(code: result.exitCode, stderr: result.stderr)
+        }
+        var out: [String: VulnSummary] = [:]
+        for record in try Self.parseScanOutput(result.stdout) where !record.formula.isEmpty {
+            out[record.formula] = VulnSummary.from(record.findings)
+        }
+        return out
+    }
+
     /// Install the `brew vulns` subcommand via
     /// `brew install homebrew/brew-vulns/brew-vulns`. Returns captured
     /// stdout (install progress) for surfacing in an activity view.

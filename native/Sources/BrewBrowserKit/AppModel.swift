@@ -1385,8 +1385,6 @@ public final class AppModel {
     /// the Exposure card / Library dots fill in progressively as the sweep runs.
     /// Whether the install-wide sweep may keep scheduling work. Re-read each
     /// iteration so flipping Offline Mode on mid-sweep stops it.
-    private var gateOpen: Bool { settings.vulnerabilityScanningAllowed }
-
     func scanAllVulns() async {
         guard settings.vulnerabilityScanningAllowed else { return }
         guard !vulnScanAllLoading else { return }
@@ -1401,55 +1399,20 @@ public final class AppModel {
         brewVulnsInstalled = installedHelper
         guard installedHelper else { return }
 
-        // Bound concurrency so a large install doesn't spawn hundreds of `brew
-        // vulns` subprocesses at once (each is a process + network round-trip).
-        let maxConcurrent = 8
+        // ONE `brew vulns --json` call over the install set — exactly like the
+        // Tauri scan_all. The old per-formula sweep over EVERY installed formula
+        // (deps included) both over-reported (Tauri's single call scans a much
+        // smaller set) and was ~331× slower. Run off the main actor so the
+        // blocking subprocess I/O doesn't freeze the UI.
         let service = vulns
-        let formulae = installed.filter { $0.kind == .formula }.map(\.name)
-
-        var index: [String: VulnSummary] = [:]
-        index = await withTaskGroup(of: (String, VulnSummary).self) { group in
-            var built: [String: VulnSummary] = [:]
-            var iterator = formulae.makeIterator()
-            var inFlight = 0
-
-            // Seed up to `maxConcurrent` tasks, re-checking the gate so flipping
-            // Offline Mode on mid-sweep stops scheduling more. The group closure
-            // is nonisolated, so the @MainActor settings read is the only hop —
-            // `scheduleNext` stays here (no `group` crossing isolation).
-            func scheduleNext() -> Bool {
-                guard let name = iterator.next() else { return false }
-                group.addTask {
-                    let findings = (try? await service.scanOne(name: name, isCask: false)) ?? []
-                    return (name, VulnSummary.from(findings))
-                }
-                inFlight += 1
-                return true
-            }
-
-            while inFlight < maxConcurrent, gateOpen, scheduleNext() {}
-
-            // Drain results as they complete, publishing each incrementally so
-            // dots/cards fill in live, then top the group back up to the cap
-            // (only while the gate is still open). The group closure runs on the
-            // main actor (it touches @MainActor state), so publishing to
-            // `vulnIndex` and re-reading the gate are direct, suspension-free —
-            // only the spawned `scanOne` subprocess work runs off-actor / parallel.
-            while let (name, summary) = await group.next() {
-                inFlight -= 1
-                built[name] = summary
-                vulnIndex[name] = summary
-                if gateOpen { _ = scheduleNext() }
-            }
-            return built
-        }
-        // Replace wholesale so a package uninstalled mid-sweep drops out of the
-        // index rather than lingering as a stale finding.
+        guard let index = try? await Task.detached(priority: .utility, operation: {
+            try await service.scanAll()
+        }).value else { return }
+        // Replace wholesale so an uninstalled package drops out of the index.
         vulnIndex = index
         vulnLastScannedAt = Date()
         // Persist so the result survives relaunch — the Exposure card shows the
-        // last scan instantly instead of re-scanning the whole install at every
-        // launch (a multi-minute sweep). Re-scan is user-initiated ("Scan now").
+        // last scan instantly instead of re-scanning at every launch.
         persistVulns()
     }
 
