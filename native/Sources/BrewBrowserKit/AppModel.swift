@@ -780,6 +780,11 @@ public final class AppModel {
     /// Timestamp of the most recent successful install-wide scan, or nil before
     /// the first one (drives the Exposure card's never-scanned vs scanned state).
     var vulnLastScannedAt: Date?
+    /// True only after a scan completed IN THIS SESSION (NOT set by loadVulns from
+    /// the persisted cache). A green "no vulnerabilities / all clean" claim is only
+    /// honest when freshly scanned — on launch we show the persisted result but
+    /// frame it as stale ("re-scan to confirm"), never a confident all-clear.
+    var vulnScannedThisSession = false
 
     /// Aggregate severity rollup across every package in `vulnIndex`. Mirrors
     /// the Tauri `vulnerabilities.severityCounts` derived value: per-severity
@@ -1431,6 +1436,7 @@ public final class AppModel {
         vulnFindings = findings
         vulnIndex = findings.mapValues { VulnSummary.from($0) }
         vulnLastScannedAt = Date()
+        vulnScannedThisSession = true
         // Persist so the result survives relaunch — the Exposure card shows the
         // last scan instantly instead of re-scanning at every launch.
         persistVulns()

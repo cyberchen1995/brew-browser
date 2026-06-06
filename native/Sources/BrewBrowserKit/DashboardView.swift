@@ -566,13 +566,15 @@ struct ExposureCard: View {
     var body: some View {
         let exposure = model.vulnExposure
         let scanned = model.vulnLastScannedAt != nil
+        // A confident green "all clean" is only honest when we just scanned this
+        // session. Stale/cached or never-scanned must NOT reassure.
+        let freshClean = model.vulnScannedThisSession && exposure.vulnerablePackages == 0
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                // Header: shield icon (tone by clean/findings) + last-scan + Scan now.
+                // Header: shield icon (green ONLY when freshly clean) + last-scan + Scan now.
                 HStack {
-                    Image(systemName: scanned && exposure.vulnerablePackages == 0
-                          ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
-                        .foregroundStyle(scanned && exposure.vulnerablePackages == 0 ? .green : .orange)
+                    Image(systemName: freshClean ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
+                        .foregroundStyle(freshClean ? .green : .orange)
                     Text("Exposure").font(.headline)
                     Spacer()
                     if scanned {
@@ -598,12 +600,33 @@ struct ExposureCard: View {
                 }
 
                 if !scanned {
-                    // Never scanned — gentle CTA, not a warning.
-                    Text("Scan installed packages for known vulnerabilities using `brew vulns` and OSV.dev.")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    // Never scanned — a HAZARD, not a gentle suggestion. We must
+                    // not imply safety we haven't verified.
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Not scanned yet.").fontWeight(.semibold)
+                            Text("We haven't checked your installed packages for known vulnerabilities. Run a scan when you can. (Vulnerability scanning is configured in Settings → Security.)")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else if exposure.vulnerablePackages == 0 && !freshClean {
+                    // Clean LAST time, but the scan is stale (loaded from cache /
+                    // not run this session). Don't claim all-clear — caution +
+                    // re-scan prompt.
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("No advisories as of the last scan (\(lastScanLabel)).").fontWeight(.semibold)
+                            Text("Packages may have changed since. Re-scan to confirm.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
                 } else if exposure.vulnerablePackages == 0 {
-                    // Clean — a GOOD result; frame it positively.
+                    // Freshly clean — a GOOD result; frame it positively.
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("No known vulnerabilities.").fontWeight(.semibold)

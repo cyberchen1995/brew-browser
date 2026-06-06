@@ -269,12 +269,24 @@ struct PackageDetailView: View {
                 } else if model.detailVulnsLoading {
                     ProgressView("Scanning all packages…")
                 } else if !model.detailVulnsScanned {
-                    Text("This package hasn't been scanned yet. Scanning checks **every** installed package — `brew vulns` can't scan just one.")
-                        .font(.callout).foregroundStyle(.secondary)
+                    // Never scanned — hazard tone; don't imply safety unverified.
+                    Label {
+                        Text("Not scanned yet. Scanning checks **every** installed package — `brew vulns` can't scan just one.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
                     Button("Scan all packages") { Task { await model.scanDetailVulns() } }
                 } else if model.detailVulns.isEmpty {
-                    Label("No known vulnerabilities", systemImage: "checkmark.seal.fill")
-                        .foregroundStyle(.green)
+                    // "Clean" is only a confident green when freshly scanned this
+                    // session; a cached/stale clean is a caution, not an all-clear.
+                    if model.vulnScannedThisSession {
+                        Label("No known vulnerabilities", systemImage: "checkmark.seal.fill")
+                            .foregroundStyle(.green)
+                    } else {
+                        Label("No advisories as of the last scan — re-scan to confirm", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
                     rescanRow
                 } else {
                     // No "Upgrade to fix" here — it duplicates the footer's
