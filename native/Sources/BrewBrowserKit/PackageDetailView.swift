@@ -237,11 +237,40 @@ struct PackageDetailView: View {
                     Label("No known vulnerabilities", systemImage: "checkmark.seal.fill")
                         .foregroundStyle(.green)
                 } else {
+                    // "Upgrade to fix" — only when an upgrade would actually
+                    // clear a finding (installed < a finding's fixedIn). Reuses
+                    // the footer's upgrade pipeline.
+                    if model.detailSecurityUpgradeAvailable {
+                        Button {
+                            Task { await model.upgradeDetail() }
+                        } label: {
+                            Label("Upgrade to fix", systemImage: "arrow.up.circle")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .help("Run brew upgrade for this package to clear known advisories")
+                    }
                     ForEach(model.detailVulns) { v in
                         VStack(alignment: .leading, spacing: 2) {
                             HStack {
-                                Text(v.rawId.isEmpty ? "Advisory" : v.rawId)
-                                    .font(.callout.monospaced())
+                                // Clickable advisory id → canonical advisory page
+                                // (NVD / osv.dev / GitHub advisories). Falls back
+                                // to a plain id when there's no resolvable URL.
+                                if !v.rawId.isEmpty, let url = model.advisoryURL(for: v) {
+                                    Button {
+                                        NSWorkspace.shared.open(url)
+                                    } label: {
+                                        HStack(spacing: 3) {
+                                            Text(v.rawId).font(.callout.monospaced())
+                                            Image(systemName: "arrow.up.right.square").font(.caption2)
+                                        }
+                                    }
+                                    .buttonStyle(.link)
+                                    .help("Open advisory: \(url.absoluteString)")
+                                } else {
+                                    Text(v.rawId.isEmpty ? "Advisory" : v.rawId)
+                                        .font(.callout.monospaced())
+                                }
                                 SeverityPill(severity: v.severity)
                                 Spacer()
                                 if let fixed = v.fixedIn {
@@ -510,6 +539,31 @@ struct SeverityPill: View {
             .padding(.horizontal, 7).padding(.vertical, 2)
             .background(color.opacity(0.2), in: .capsule)
             .foregroundStyle(color)
+    }
+}
+
+/// Small filled circle colored by max severity — the Library row vulnerability
+/// indicator. Mirrors the Tauri PackageRow severity dot (colour wins by max
+/// severity; hover tooltip carries the finding count + highest severity). Uses
+/// the same severity→colour mapping as ``SeverityPill``.
+struct SeverityDot: View {
+    let severity: VulnSeverity
+    let count: Int
+
+    private var color: Color {
+        switch severity {
+        case .critical, .high: return .red
+        case .medium: return .orange
+        case .low: return .yellow
+        case .unknown: return .gray
+        }
+    }
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 8, height: 8)
+            .help("\(count) known vulnerabilit\(count == 1 ? "y" : "ies") (highest: \(severity.rawValue)). Click row to see details.")
     }
 }
 

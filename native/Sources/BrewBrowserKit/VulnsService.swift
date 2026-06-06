@@ -114,6 +114,27 @@ struct VulnSummary: Sendable, Hashable {
     }
 }
 
+// MARK: - Install-wide exposure rollup
+
+/// Aggregate severity counts across an entire install, plus the count of
+/// packages with at least one finding. The native analogue of the frontend
+/// `SeverityCounts` rollup (`vulnerabilities.svelte.ts`) — distinct from
+/// ``VulnSummary`` (one package) in carrying `vulnerablePackages` (a
+/// per-package, not per-finding, count). Backs the Dashboard Exposure card.
+struct VulnExposure: Sendable, Hashable {
+    var critical = 0
+    var high = 0
+    var medium = 0
+    var low = 0
+    var unknown = 0
+    /// Count of packages with ≥1 finding (NOT a finding total). Mirrors the
+    /// Tauri `SeverityCounts.vulnerablePackages`.
+    var vulnerablePackages = 0
+
+    /// Total findings across all severities.
+    var total: Int { critical + high + medium + low + unknown }
+}
+
 // MARK: - Errors
 
 /// Errors surfaced by ``VulnsService``. Self-contained (does not reuse

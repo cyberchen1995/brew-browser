@@ -48,6 +48,12 @@ struct DashboardView: View {
 
                     if model.githubStatsEligible { GitHubCard(model: model) }
 
+                    // Exposure card — opt-in only; hidden entirely when
+                    // Settings → Vulnerability Scanning is off so the dashboard
+                    // doesn't nag users who haven't enabled it (mirrors the
+                    // Tauri `exposureVisible` gate).
+                    if model.settings.vulnerabilityScanningAllowed { ExposureCard(model: model) }
+
                     StorageCard(model: model)
                 }
                 .padding(20)
@@ -456,6 +462,107 @@ struct StorageCard: View {
                 }
             }
             .padding(.top, 2)
+        }
+    }
+}
+
+// MARK: - Exposure (vulnerability surfacing)
+
+/// Dashboard Exposure card — install-wide vulnerability surface. Parity with
+/// the Tauri `Dashboard.svelte` Exposure section. Three states, mirroring the
+/// Tauri card: never-scanned CTA, clean positive state, and per-severity counts
+/// with the "X of N" summary + "View vulnerable packages". The parent gates
+/// rendering on `vulnerabilityScanningAllowed` (opt-in), so this view never has
+/// to render a "scanning disabled" stub.
+struct ExposureCard: View {
+    @Bindable var model: AppModel
+
+    /// "Last scan: 2 hours ago" / "never". Same RelativeDateTimeFormatter UX
+    /// language as the Tauri card's `Intl.RelativeTimeFormat`.
+    private var lastScanLabel: String {
+        guard let at = model.vulnLastScannedAt else { return "never" }
+        let fmt = RelativeDateTimeFormatter()
+        fmt.unitsStyle = .full
+        return fmt.localizedString(for: at, relativeTo: Date())
+    }
+
+    var body: some View {
+        let exposure = model.vulnExposure
+        let scanned = model.vulnLastScannedAt != nil
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                // Header: shield icon (tone by clean/findings) + last-scan + Scan now.
+                HStack {
+                    Image(systemName: scanned && exposure.vulnerablePackages == 0
+                          ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
+                        .foregroundStyle(scanned && exposure.vulnerablePackages == 0 ? .green : .orange)
+                    Text("Exposure").font(.headline)
+                    Spacer()
+                    if scanned {
+                        Text("Last scan: \(lastScanLabel)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button {
+                        Task { await model.scanAllVulns() }
+                    } label: {
+                        if model.vulnScanAllLoading {
+                            Label("Scanning…", systemImage: "arrow.clockwise")
+                        } else {
+                            Label("Scan now", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .controlSize(.small)
+                    .disabled(model.vulnScanAllLoading)
+                    .help("Re-run brew vulns against every installed formula")
+                }
+
+                if !scanned {
+                    // Never scanned — gentle CTA, not a warning.
+                    Text("Scan installed packages for known vulnerabilities using `brew vulns` and OSV.dev.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if exposure.vulnerablePackages == 0 {
+                    // Clean — a GOOD result; frame it positively.
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("No known vulnerabilities.").fontWeight(.semibold)
+                            Text("All installed packages are clean of advisories known to brew vulns.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    }
+                } else {
+                    // Findings — per-severity counts + "X of N" summary line.
+                    HStack(spacing: 16) {
+                        sevCount(exposure.critical, "critical", .red)
+                        sevCount(exposure.high, "high", .red)
+                        sevCount(exposure.medium, "medium", .orange)
+                        sevCount(exposure.low, "low", .yellow)
+                        if exposure.unknown > 0 { sevCount(exposure.unknown, "unknown", .gray) }
+                        Spacer()
+                    }
+                    Text("\(exposure.vulnerablePackages) of \(model.totalPackages) installed packages have known vulnerabilities")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Button("View vulnerable packages →") {
+                        model.openVulnerableInLibrary()
+                    }
+                    .buttonStyle(.link)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 2)
+        }
+        // Lazy first scan on first appearance (mirrors the Tauri exposure
+        // card's scanIfNeeded). No-op once scanned or if disabled.
+        .task { await model.scanVulnsIfNeeded() }
+    }
+
+    /// One severity count chip — bold number + lowercase label, toned by color.
+    private func sevCount(_ n: Int, _ label: String, _ color: Color) -> some View {
+        HStack(spacing: 4) {
+            Text("\(n)").font(.callout.weight(.semibold)).foregroundStyle(color)
+            Text(label).font(.caption).foregroundStyle(.secondary)
         }
     }
 }

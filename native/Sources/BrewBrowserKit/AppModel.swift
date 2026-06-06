@@ -29,13 +29,16 @@ enum Section: String, CaseIterable, Identifiable, Hashable {
 }
 
 /// Library type filter — drives the segmented control above the Library table.
-/// Mirrors the Tauri Library pill set minus "vulnerable" (which needs a
-/// library-wide scan-all, still deferred on the native side).
+/// Mirrors the Tauri Library pill set. `.vulnerable` is only meaningful once an
+/// install-wide scan has populated `AppModel.vulnIndex`, and (like Tauri) is
+/// only offered when vulnerability scanning is enabled — see
+/// `AppModel.availableLibraryFilters`.
 enum LibraryFilter: String, CaseIterable, Identifiable, Hashable {
-    case all      = "All"
-    case formulae = "Formulae"
-    case casks    = "Casks"
-    case outdated = "Outdated"
+    case all        = "All"
+    case formulae   = "Formulae"
+    case casks      = "Casks"
+    case outdated   = "Outdated"
+    case vulnerable = "Vulnerable"
 
     var id: String { rawValue }
 }
@@ -53,6 +56,12 @@ struct LibraryRow: Identifiable, Hashable, Sendable {
     let kind: InstalledPackage.Kind
     let isOutdated: Bool
     let summary: String
+    /// Highest-severity known finding for this package, or nil when the package
+    /// is clean / not-yet-scanned. Drives the per-row severity dot. Populated
+    /// from `AppModel.vulnIndex`; empty until an install-wide scan has run.
+    let maxSeverity: VulnSeverity?
+    /// Number of known findings (any severity) — backs the dot's hover tooltip.
+    let vulnCount: Int
 
     /// Comparable proxy for sorting the Outdated column (`Bool` isn't
     /// `Comparable`). Outdated rows sort high so descending surfaces them first.
@@ -147,11 +156,13 @@ public final class AppModel {
         let q = globalQuery.trimmingCharacters(in: .whitespaces)
 
         return installed.compactMap { pkg in
+            let vuln = vulnIndex[pkg.name]
             switch libraryFilter {
-            case .all:      break
-            case .formulae: guard pkg.kind == .formula else { return nil }
-            case .casks:    guard pkg.kind == .cask else { return nil }
-            case .outdated: guard outdatedSet.contains(pkg.name) else { return nil }
+            case .all:        break
+            case .formulae:   guard pkg.kind == .formula else { return nil }
+            case .casks:      guard pkg.kind == .cask else { return nil }
+            case .outdated:   guard outdatedSet.contains(pkg.name) else { return nil }
+            case .vulnerable: guard (vuln?.total ?? 0) > 0 else { return nil }
             }
             if !q.isEmpty, !pkg.name.localizedCaseInsensitiveContains(q) { return nil }
             let entry = showSummary ? enrichmentEntry(for: pkg.name) : nil
@@ -162,7 +173,9 @@ public final class AppModel {
                 version: pkg.version,
                 kind: pkg.kind,
                 isOutdated: outdatedSet.contains(pkg.name),
-                summary: showSummary ? (entry?.summary ?? "") : ""
+                summary: showSummary ? (entry?.summary ?? "") : "",
+                maxSeverity: (vuln?.total ?? 0) > 0 ? vuln?.maxSeverity : nil,
+                vulnCount: vuln?.total ?? 0
             )
         }
     }
@@ -175,10 +188,20 @@ public final class AppModel {
     /// Per-filter row counts for the segmented control labels.
     func libraryFilterCount(_ filter: LibraryFilter) -> Int {
         switch filter {
-        case .all:      return installed.count
-        case .formulae: return installed.lazy.filter { $0.kind == .formula }.count
-        case .casks:    return installed.lazy.filter { $0.kind == .cask }.count
-        case .outdated: return outdatedNames.count
+        case .all:        return installed.count
+        case .formulae:   return installed.lazy.filter { $0.kind == .formula }.count
+        case .casks:      return installed.lazy.filter { $0.kind == .cask }.count
+        case .outdated:   return outdatedNames.count
+        case .vulnerable: return vulnerableCount
+        }
+    }
+
+    /// Filters offered by the Library segmented control. `.vulnerable` is hidden
+    /// unless vulnerability scanning is enabled (mirrors the Tauri Library pill
+    /// set, which only appends "vulnerable" when `vulnerabilities.enabled`).
+    var availableLibraryFilters: [LibraryFilter] {
+        LibraryFilter.allCases.filter { filter in
+            filter != .vulnerable || settings.vulnerabilityScanningAllowed
         }
     }
 
@@ -419,6 +442,16 @@ public final class AppModel {
         selection = .library
     }
 
+    /// Open Library filtered to packages with known vulnerabilities. Used by the
+    /// Dashboard Exposure card's "View vulnerable packages" link and the sidebar
+    /// vuln badge. Mirrors the Tauri `viewVulnerablePackages` (setSection then
+    /// setFilter("vulnerable")).
+    func openVulnerableInLibrary() {
+        globalQuery = ""
+        libraryFilter = .vulnerable
+        selection = .library
+    }
+
     // MARK: - Keyboard commands (⌘ menu shortcuts)
 
     /// Navigate to a section by its ⌘0–6 number. Mirrors the Tauri `+page.svelte`
@@ -589,6 +622,40 @@ public final class AppModel {
     var detailVulnsLoading = false
     var brewVulnsInstalled = false
 
+    // ---- Vulnerabilities (install-wide / Exposure) ----
+    /// name → per-package severity rollup, built by `scanAllVulns`. Drives the
+    /// Library Vulnerable filter + per-row dot, the sidebar badge, and the
+    /// Dashboard Exposure card. The native analogue of the Tauri
+    /// `vulnerabilities.records` Map (keyed by name here — the only installed
+    /// package with a given name is unambiguous in our flat list). Entries with
+    /// `total == 0` are scanned-but-clean; absence means not-yet-scanned.
+    var vulnIndex: [String: VulnSummary] = [:]
+    /// True while a full install-wide scan is in flight (Exposure "Scan now").
+    var vulnScanAllLoading = false
+    /// Timestamp of the most recent successful install-wide scan, or nil before
+    /// the first one (drives the Exposure card's never-scanned vs scanned state).
+    var vulnLastScannedAt: Date?
+
+    /// Aggregate severity rollup across every package in `vulnIndex`. Mirrors
+    /// the Tauri `vulnerabilities.severityCounts` derived value: per-severity
+    /// finding counts + the count of packages with ≥1 finding.
+    var vulnExposure: VulnExposure {
+        var exp = VulnExposure()
+        for summary in vulnIndex.values {
+            exp.critical += summary.critical
+            exp.high += summary.high
+            exp.medium += summary.medium
+            exp.low += summary.low
+            exp.unknown += summary.unknown
+            if summary.total > 0 { exp.vulnerablePackages += 1 }
+        }
+        return exp
+    }
+
+    /// Count of installed packages with at least one known finding. Backs the
+    /// Library Vulnerable pill count + the sidebar badge.
+    var vulnerableCount: Int { vulnExposure.vulnerablePackages }
+
     // ---- Install trend ----
     var detailTrend: TrendingHistorySeries?
 
@@ -693,9 +760,16 @@ public final class AppModel {
 #endif
 
     /// Count badge for a sidebar section (nil = no badge). Library shows the
-    /// outdated count; Services shows running services.
+    /// outdated count; Services shows running services; Activity shows running
+    /// jobs. Dashboard surfaces the vulnerable-package count (the native home
+    /// for the vuln badge — the Exposure card lives on the Dashboard, and the
+    /// Tauri sidebar vuln badge likewise routes to the Dashboard on click; the
+    /// stock `.badge` carries one number, so vulns ride the Dashboard row
+    /// rather than crowding Library's outdated count).
     func badge(for section: Section) -> Int? {
         switch section {
+        case .dashboard:
+            return settings.vulnerabilityScanningAllowed && vulnerableCount > 0 ? vulnerableCount : nil
         case .library:  return outdatedCount > 0 ? outdatedCount : nil
         case .services: return runningServices > 0 ? runningServices : nil
         case .activity:
@@ -1049,6 +1123,120 @@ public final class AppModel {
         detailVulns = findings
         detailVulnsScanned = true
         detailVulnsLoading = false
+        // Fold the result into the install-wide index so the Library dot,
+        // sidebar badge, and Exposure card reflect a single-package re-check
+        // without a full re-scan (mirrors the Tauri store's scanOne updating
+        // the shared `records` Map).
+        vulnIndex[pkg.name] = VulnSummary.from(findings)
+    }
+
+    /// Lazy first scan on first interest — called when a vuln-surfacing view
+    /// appears (Exposure card `.task`, Library `.vulnerable` filter). No-ops
+    /// when scanning is disabled, already scanned, or a scan is in flight.
+    /// Mirrors the Tauri store's `scanIfNeeded`.
+    func scanVulnsIfNeeded() async {
+        guard settings.vulnerabilityScanningAllowed else { return }
+        guard vulnLastScannedAt == nil, !vulnScanAllLoading else { return }
+        await scanAllVulns()
+    }
+
+    /// Scan every installed formula for known vulnerabilities and build the
+    /// `vulnIndex` severity rollup. The install-wide analogue of
+    /// `scanDetailVulns` — the native parallel to the Tauri
+    /// `vulnerabilities.scanAll`. Casks are skipped (brew-vulns is
+    /// formula-only; `scanOne` short-circuits them to empty anyway).
+    ///
+    /// Gated on `vulnerabilityScanningAllowed` (Offline Mode off + toggle on),
+    /// matching the detail scan and the Tauri store's `enabled` predicate.
+    /// Runs each `scanOne` off the main actor (the `VulnsService` actor) and
+    /// folds results in incrementally so the Exposure card / Library dots fill
+    /// in progressively rather than blocking on the whole sweep.
+    func scanAllVulns() async {
+        guard settings.vulnerabilityScanningAllowed else { return }
+        guard !vulnScanAllLoading else { return }
+        vulnScanAllLoading = true
+        defer {
+            vulnScanAllLoading = false
+            vulnLastScannedAt = Date()
+        }
+
+        // Ensure the helper is present so the sweep doesn't silently no-op into
+        // an all-clean state (which would be a fake "no vulnerabilities" signal).
+        let installedHelper = await vulns.isBrewVulnsInstalled()
+        brewVulnsInstalled = installedHelper
+        guard installedHelper else { return }
+
+        var index: [String: VulnSummary] = [:]
+        for pkg in installed where pkg.kind == .formula {
+            // Re-check the gate each iteration: a long sweep shouldn't keep
+            // hitting the network after the user flips Offline Mode on.
+            guard settings.vulnerabilityScanningAllowed else { break }
+            let findings = (try? await vulns.scanOne(name: pkg.name, isCask: false)) ?? []
+            index[pkg.name] = VulnSummary.from(findings)
+            // Publish incrementally so dots/cards fill in as the sweep runs.
+            vulnIndex[pkg.name] = index[pkg.name]
+        }
+        // Replace wholesale so a package uninstalled mid-sweep drops out of the
+        // index rather than lingering as a stale finding.
+        vulnIndex = index
+    }
+
+    /// Canonical advisory URL for a finding — the first HTTPS reference if the
+    /// entry carries one, else the canonical detail page derived from the id
+    /// prefix (CVE→NVD, OSV→osv.dev, GHSA→GitHub advisories). Mirrors the Tauri
+    /// `vulnPrimaryLink` + `canonicalVulnUrl`. Returns nil for an id-less /
+    /// unrecognized entry so the UI can render a plain, non-clickable id.
+    func advisoryURL(for finding: VulnFinding) -> URL? {
+        for ref in finding.references where ref.hasPrefix("https://") {
+            if let url = URL(string: ref) { return url }
+        }
+        return Self.canonicalAdvisoryURL(id: finding.rawId)
+    }
+
+    /// Map a vulnerability id to its canonical detail page. Mirrors the Tauri
+    /// `canonicalVulnUrl`.
+    static func canonicalAdvisoryURL(id: String) -> URL? {
+        guard !id.isEmpty else { return nil }
+        if id.hasPrefix("CVE-") { return URL(string: "https://nvd.nist.gov/vuln/detail/\(id)") }
+        if id.hasPrefix("OSV-") { return URL(string: "https://osv.dev/vulnerability/\(id)") }
+        if id.hasPrefix("GHSA-") { return URL(string: "https://github.com/advisories/\(id)") }
+        return nil
+    }
+
+    /// True when the detail package has at least one finding whose `fixedIn`
+    /// version is newer than what's installed — i.e. an upgrade would clear a
+    /// known advisory. Drives the Security card's "Upgrade to fix" button.
+    /// Mirrors the Tauri `securityUpgradeAvailable`.
+    var detailSecurityUpgradeAvailable: Bool {
+        guard let installed = detailPackage?.version, !installed.isEmpty else { return false }
+        return detailVulns.contains { finding in
+            guard let fixed = finding.fixedIn else { return false }
+            return Self.versionLessThan(installed, fixed)
+        }
+    }
+
+    /// Naïve dot/dash-segment version compare — true when `a` is strictly older
+    /// than `b`. Good enough for brew's mostly-semver tags; degrades to "show
+    /// the upgrade button" (false-positive bias) on odd suffixes. Mirrors the
+    /// Tauri `versionLessThan`.
+    static func versionLessThan(_ a: String, _ b: String) -> Bool {
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        func norm(_ v: String) -> [String] {
+            var s = v
+            if let first = s.first, first == "v" || first == "V" { s.removeFirst() }
+            return s.split(whereSeparator: { $0 == "." || $0 == "-" }).map(String.init)
+        }
+        let aa = norm(a), bb = norm(b)
+        for i in 0..<max(aa.count, bb.count) {
+            let as_ = i < aa.count ? aa[i] : "0"
+            let bs = i < bb.count ? bb[i] : "0"
+            if let an = Int(as_), let bn = Int(bs) {
+                if an != bn { return an < bn }
+            } else {
+                if as_ != bs { return as_ < bs }
+            }
+        }
+        return false
     }
 
     // MARK: - Detail actions

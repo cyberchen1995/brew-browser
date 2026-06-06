@@ -256,13 +256,19 @@ struct LibraryView: View {
         .onChange(of: model.showDetail) { _, shown in
             if !shown { selectedID = nil }
         }
+        // Lazy first vuln scan when the user lands on (or switches to) the
+        // Vulnerable filter, so the rows/count populate even without visiting
+        // the Dashboard first (mirrors the Tauri store's scanIfNeeded).
+        .task(id: model.libraryFilter) {
+            if model.libraryFilter == .vulnerable { await model.scanVulnsIfNeeded() }
+        }
     }
 
     // Segmented type filter with per-filter counts. Stock control, no overrides.
     // Centered in the bar — the macOS view-switcher convention (Finder/Preview).
     private var filterBar: some View {
         Picker("Filter", selection: $model.libraryFilter) {
-            ForEach(LibraryFilter.allCases) { f in
+            ForEach(model.availableLibraryFilters) { f in
                 Text("\(f.rawValue) (\(model.libraryFilterCount(f)))").tag(f)
             }
         }
@@ -303,15 +309,7 @@ struct LibraryView: View {
     private var tableWithDescription: some View {
         Table(model.sortedLibraryRows, selection: $selectedID, sortOrder: $model.librarySort) {
             TableColumn("Name", value: \.name) { row in
-                HStack(spacing: 8) {
-                    PackageIcon(model: model, token: row.name, kind: row.kind)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(row.name)
-                        if !row.friendlyName.isEmpty {
-                            Text(row.friendlyName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                    }
-                }
+                nameCell(row)
             }
             .width(min: 140, ideal: 200)
 
@@ -341,15 +339,7 @@ struct LibraryView: View {
     private var tableNoDescription: some View {
         Table(model.sortedLibraryRows, selection: $selectedID, sortOrder: $model.librarySort) {
             TableColumn("Name", value: \.name) { row in
-                HStack(spacing: 8) {
-                    PackageIcon(model: model, token: row.name, kind: row.kind)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(row.name)
-                        if !row.friendlyName.isEmpty {
-                            Text(row.friendlyName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                    }
-                }
+                nameCell(row)
             }
             .width(min: 140, ideal: 240)
 
@@ -369,6 +359,29 @@ struct LibraryView: View {
             .width(min: 56, ideal: 72)
         }
         .onChange(of: selectedID, openSelected)
+    }
+
+    /// The Name cell shared by both table variants — icon + name/friendly-name,
+    /// with an inline severity dot (after the name) when the package has known
+    /// vulnerabilities. Shared so the dot lands in BOTH the AI-on and AI-off
+    /// column sets without duplicating the cell body (the column SET differs
+    /// between variants, but the Name cell is identical — see the variant note).
+    @ViewBuilder
+    private func nameCell(_ row: LibraryRow) -> some View {
+        HStack(spacing: 8) {
+            PackageIcon(model: model, token: row.name, kind: row.kind)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(row.name)
+                    if let severity = row.maxSeverity {
+                        SeverityDot(severity: severity, count: row.vulnCount)
+                    }
+                }
+                if !row.friendlyName.isEmpty {
+                    Text(row.friendlyName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+        }
     }
 
     @ViewBuilder
