@@ -220,6 +220,11 @@ public struct ContentView: View {
       .sheet(isPresented: $model.paletteOpen) {
           CommandPaletteView(model: model)
       }
+      // Custom About box (replaces the bare standard panel) — opened from the
+      // app menu's "About brew-browser". Mirrors the Tauri AboutModal.
+      .sheet(isPresented: $model.aboutOpen) {
+          AboutView(model: model)
+      }
       // Esc closes the open detail inspector. The palette is a `.sheet`, which
       // handles its own Esc, so by the time Esc reaches here the palette is
       // already closed and only the inspector remains. Returns `.ignored` when

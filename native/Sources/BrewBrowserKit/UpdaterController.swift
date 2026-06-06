@@ -25,7 +25,16 @@ import Combine
 public final class UpdaterController {
     /// Sparkle's standard controller — creates the updater + the standard user
     /// driver (the native update alert/progress UI). Held for the app's lifetime.
-    private let controller: SPUStandardUpdaterController
+    /// `nil` when running UNBUNDLED (Xcode Run / `swift run`): Bundle.main is the
+    /// bare build dir ("Debug") with no Info.plist + no embedded Sparkle.framework,
+    /// so the updater can't start — we stay inert instead of throwing Sparkle's
+    /// "updater failed to start" alert. Real updates require the assembled .app.
+    private let controller: SPUStandardUpdaterController?
+
+    /// True only when launched as the assembled .app (Info.plist carries the
+    /// Sparkle keys). False from an Xcode/`swift run` binary — the updater UI is
+    /// then disabled rather than failing loudly.
+    public let isSupported: Bool
 
     /// The `SPUUpdaterDelegate`. Sparkle takes the delegate at controller-init
     /// time (`SPUUpdater.delegate` is read-only), and it can't be `self` before
@@ -48,21 +57,32 @@ public final class UpdaterController {
     private var cancellable: AnyCancellable?
 
     public init() {
+        // Only wire Sparkle when launched as the real .app — the Info.plist's
+        // SUFeedURL is the tell (absent from an unbundled Xcode/`swift run`
+        // binary). Otherwise stay inert: canCheckForUpdates stays false → the
+        // menu item + "Check now" disable themselves, no scary "failed to start".
+        isSupported = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil
+        guard isSupported else {
+            controller = nil
+            return
+        }
+
         // Pass the delegate at construction (the only place Sparkle accepts one).
         // `startingUpdater: true` begins scheduled checks per the Info.plist
         // SUEnableAutomaticChecks / SUScheduledCheckInterval keys.
-        controller = SPUStandardUpdaterController(
+        let c = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: delegate,
             userDriverDelegate: nil
         )
+        controller = c
 
         // Route the delegate's callbacks back to our @Observable flags.
         delegate.onFindValidUpdate = { [weak self] in self?.updateAvailable = true }
         delegate.onNotFindUpdate = { [weak self] in self?.updateAvailable = false }
 
         // Bridge Sparkle's KVO `canCheckForUpdates` into our @Observable property.
-        cancellable = controller.updater
+        cancellable = c.updater
             .publisher(for: \.canCheckForUpdates)
             .sink { [weak self] value in
                 self?.canCheckForUpdates = value
@@ -74,14 +94,14 @@ public final class UpdaterController {
     /// writes through to Sparkle (which persists it in UserDefaults, the standard
     /// `SUEnableAutomaticChecks` user preference).
     public var automaticallyChecksForUpdates: Bool {
-        get { controller.updater.automaticallyChecksForUpdates }
-        set { controller.updater.automaticallyChecksForUpdates = newValue }
+        get { controller?.updater.automaticallyChecksForUpdates ?? false }
+        set { controller?.updater.automaticallyChecksForUpdates = newValue }
     }
 
     /// The last time Sparkle checked the feed (manual or scheduled). `nil` until
     /// the first check. Surfaced as a relative date in Settings → Updates.
     public var lastUpdateCheckDate: Date? {
-        controller.updater.lastUpdateCheckDate
+        controller?.updater.lastUpdateCheckDate
     }
 
     /// Show Sparkle's update UI: checks the feed and, if an update is available,
@@ -90,6 +110,7 @@ public final class UpdaterController {
     /// the titlebar pill. Opening the flow clears `updateAvailable` — Sparkle's UI
     /// now owns the interaction, so the pill shouldn't keep nagging.
     public func checkForUpdates() {
+        guard let controller else { return }
         updateAvailable = false
         controller.checkForUpdates(nil)
     }

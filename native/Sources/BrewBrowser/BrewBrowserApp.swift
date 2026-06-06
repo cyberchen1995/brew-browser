@@ -60,16 +60,12 @@ struct AppCommands: Commands {
     var updater: UpdaterController
 
     var body: some Commands {
-        // Replace the stock "About brew-browser" menu item with one that opens
-        // the standard AppKit About panel carrying custom credits (the
-        // multi-agent build + Apple-native version/Homebrew lines) and a
-        // clickable Sponsor link. The standard panel is the most native option —
-        // it reads app name/version/icon from the Info.plist automatically; we
-        // only inject the credits + a few extra options. Mirrors the Tauri
-        // AboutModal (`AboutModal.svelte`). A "Sponsor brew-browser…" item is
-        // appended right below so the donate CTA lives in the app menu too.
+        // Replace the stock "About brew-browser" item with our custom About box
+        // (AboutView sheet) — a richer, brand hero + credits + donate CTA that
+        // mirrors the Tauri AboutModal. A "Sponsor brew-browser…" item sits below
+        // so the donate CTA also lives in the app menu.
         CommandGroup(replacing: .appInfo) {
-            Button("About brew-browser") { showAboutPanel() }
+            Button("About brew-browser") { model.aboutOpen = true }
             Button("Sponsor brew-browser…") {
                 if let url = URL(string: AboutInfo.sponsorURL) {
                     NSWorkspace.shared.open(url)
@@ -140,43 +136,6 @@ enum AboutInfo {
     static let repoURL = "https://github.com/msitarzewski/brew-browser"
 }
 
-/// Open the standard AppKit About panel with custom credits. App name, version,
-/// and icon come from the Info.plist automatically (so a notarized release shows
-/// the right version with no extra wiring); we add the multi-agent build credits,
-/// the MIT/zero-telemetry affirmation, a repo line, and a clickable Sponsor link
-/// — the native parity for the Tauri AboutModal.
-@MainActor
-private func showAboutPanel() {
-    let credits = NSMutableAttributedString()
-    let body: [NSAttributedString.Key: Any] = [
-        .font: NSFont.systemFont(ofSize: 11),
-        .foregroundColor: NSColor.secondaryLabelColor,
-    ]
-    credits.append(NSAttributedString(
-        string: "A native macOS GUI for Homebrew. MIT licensed — zero telemetry, zero accounts. Every outbound network call is documented in Settings → Network.\n\n",
-        attributes: body))
-    credits.append(NSAttributedString(
-        string: "Built with Agency Agents — the multi-agent toolkit that orchestrated the waves — powered by Claude Code running Opus. Thanks to the Homebrew project, every formula and cask maintainer, and Apple's SwiftUI.\n\n",
-        attributes: body))
-
-    // Clickable links (Sponsor + repo) — NSAttributedString `.link` makes the
-    // About panel render them as real, clickable links.
-    let linkBase = body.merging([.foregroundColor: NSColor.linkColor]) { _, new in new }
-    if let sponsor = URL(string: AboutInfo.sponsorURL) {
-        credits.append(NSAttributedString(
-            string: "Sponsor brew-browser",
-            attributes: linkBase.merging([.link: sponsor]) { _, new in new }))
-        credits.append(NSAttributedString(string: "   ", attributes: body))
-    }
-    if let repo = URL(string: AboutInfo.repoURL) {
-        credits.append(NSAttributedString(
-            string: "GitHub repo",
-            attributes: linkBase.merging([.link: repo]) { _, new in new }))
-    }
-
-    NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
-    NSApp.activate(ignoringOtherApps: true)
-}
 
 /// Promotes a bare/unbundled launch (Xcode ⌘R) to a normal foreground app.
 final class AppDelegate: NSObject, NSApplicationDelegate {

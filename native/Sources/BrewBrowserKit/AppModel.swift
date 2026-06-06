@@ -722,6 +722,10 @@ public final class AppModel {
     /// command and the palette's own close/activate paths.
     public var paletteOpen = false
 
+    /// Custom About box (`AboutView`) — toggled by the app menu's "About
+    /// brew-browser". Mirrors the Tauri `ui.aboutOpen` modal.
+    public var aboutOpen = false
+
     // ---- In-window toasts (transient overlay; see Toast.swift) ----
     /// The live toast queue, newest last. Rendered top-trailing by `ToastOverlay`
     /// so it never overlaps the bottom Activity drawer. Mirrors the Tauri toast
