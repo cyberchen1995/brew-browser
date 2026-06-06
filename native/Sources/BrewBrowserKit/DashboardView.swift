@@ -203,9 +203,10 @@ struct UpdatesCard: View {
                     }
                     .buttonStyle(.plain)
                     Spacer()
-                    Button("Update") { Task { await model.updateHomebrew() } }
-                        .controlSize(.small)
-                        .help("Run brew update to refresh package metadata")
+                    // No "Update" button here — the catalog "Refresh" above runs
+                    // `brew update` + re-pulls the catalog, so a separate Update
+                    // was redundant (and Tauri's Updates card has only Choose… +
+                    // Upgrade all).
                     Button("Choose…") { showUpgradeSheet = true }
                         .controlSize(.small)
                     Button {

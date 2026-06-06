@@ -1508,13 +1508,6 @@ public final class AppModel {
 
     // MARK: - Bulk actions (Dashboard Updates card)
 
-    /// `brew update` — refresh Homebrew's formula/cask metadata, as a streaming
-    /// Activity job. Mirrors Tauri's Dashboard "Update" action. Surfaces in the
-    /// Activity panel so a routine update leaves a visible record.
-    func updateHomebrew() async {
-        await startJob("Updating Homebrew", args: ["update"], startedAt: Date().timeIntervalSince1970)
-    }
-
     /// `brew upgrade` — upgrade every outdated formula and cask, as a streaming
     /// Activity job. Mirrors Tauri's Dashboard "Upgrade all". `startJob` calls
     /// `refresh()` on completion, so the outdated count updates itself.
