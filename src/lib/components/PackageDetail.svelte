@@ -1009,13 +1009,14 @@
                   class="sec-btn sec-btn-primary"
                   disabled={securityLoading}
                   onclick={checkSecurity}
+                  title="Runs brew vulns across your whole install — it can't scan a single package"
                 >
                   {#if securityLoading}
                     <Loader size={14} class="spin-slow" />
-                    <span>Checking…</span>
+                    <span>Scanning all…</span>
                   {:else}
                     <Shield size={14} />
-                    <span>Check now</span>
+                    <span>Scan all packages</span>
                   {/if}
                 </button>
               </div>
@@ -1039,8 +1040,9 @@
                   class="sec-link"
                   disabled={securityLoading}
                   onclick={checkSecurity}
+                  title="Runs brew vulns across your whole install — it can't scan a single package"
                 >
-                  {securityLoading ? "Re-checking…" : "Re-check"}
+                  {securityLoading ? "Scanning all…" : "Re-scan all"}
                 </button>
               </div>
             {:else}
@@ -1129,8 +1131,9 @@
                   class="sec-link"
                   disabled={securityLoading}
                   onclick={checkSecurity}
+                  title="Runs brew vulns across your whole install — it can't scan a single package"
                 >
-                  {securityLoading ? "Re-checking…" : "Re-check"}
+                  {securityLoading ? "Scanning all…" : "Re-scan all"}
                 </button>
               </div>
             {/if}
