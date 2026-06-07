@@ -933,3 +933,28 @@ Static JSON from Caddy, rendered nightly by `tools/pipeline/render_served.py` (d
 ### 18.5 Verdict
 
 Feature gate, not a posture change — identical opt-in + paranoid-composition + soft-fail shape as Enhanced Trending. Disclosure copy lives in `SettingsSectionLiveEnrichment.svelte` and README's outbound enumeration (twelfth path).
+
+## 19. Pre-release security pass (2026-06-07)
+
+Static + dependency audit of **both** builds before the launch-batch release.
+
+### 19.1 Automated scans
+- **cargo audit** (RustSec, 1121 advisories, 566 crates): **0 vulnerabilities.** 17 `unmaintained` warnings — all Linux-only GTK3/glib bindings + build-time macro crates (not compiled on macOS, no CVEs, transitive via Tauri/wry). Documented + ignored in `src-tauri/.cargo/audit.toml`.
+- **npm audit** (122 pkgs): 3× **low** — transitive `cookie <0.7.0` via SvelteKit. **Accepted, not fixed** — no real surface in a desktop app (no SSR/untrusted cookie parsing), and forcing `cookie@0.7` under a SvelteKit declaring `0.6` is a worse trade than the low advisory. Re-evaluate when the pinned registry offers a SvelteKit on cookie 0.7.
+- **osv-scanner**: Cargo.lock + npm corroborated; couldn't parse Swift `Package.resolved` (Sparkle 2.9.2 — 2.x is current, historical CVEs were 1.x).
+- **gitleaks** (130 commits, 9 MB): 2 hits, **both false positives** (a UserDefaults key-name constant; the word "token" in AGENTS.md prose) — suppressed via `.gitleaksignore`.
+- **semgrep** (security-audit/rust/ts, 92 rules): **0 findings.**
+
+### 19.2 Manual review — all PASS
+- **Command injection:** every `brew` shell-out via typed-arg `tokio::process::Command` (Rust) / `Process.arguments` (Swift) — no `sh -c`. `validate_package_name` at every name-taking command (install/uninstall/upgrade/upgrade_many/info/cask), tested against shell-meta + leading-`-` flag injection + NUL + length.
+- **Path traversal:** `validate_brewfile_id` (Rust, PR #46) + `SnapshotStore.validateID` (Swift) — allowlist `[A-Za-z0-9_-]`, reject `/ . .. NUL`, at the path-join chokepoint.
+- **Tauri sandbox:** CSP `default-src 'self'`, explicit `connect-src` host allowlist (5 hosts), `object-src/frame-ancestors 'none'`, `withGlobalTauri:false`; minimal capabilities (no `shell:`/`fs:`/`http:`).
+- **Update integrity:** Tauri minisign `pubkey` + Sparkle `SUPublicEDKey` (ed25519), HTTPS, no insecure/allow-unsigned flags.
+- **Token hygiene:** GitHub token only in the `Authorization: Bearer` header — never in a URL or log.
+- **Parser robustness:** brew-output + classifier parsers fuzzed both languages — zero panics on adversarial input.
+
+### 19.3 Not run (deferred to a hands-on session)
+Interactive runtime/MITM: Offline-Mode-zero-connections verification, live TLS-cert-validation (mitmproxy), and the updater-tamper rejection test. Statically the config/code is correct; these would prove it at runtime.
+
+### 19.4 Verdict
+**Clean for release.** Zero exploitable findings; the two highest-risk surfaces (command injection, path traversal) are well-defended with tested allowlists and no shell interpolation. Open items are hygiene, not vulnerabilities.

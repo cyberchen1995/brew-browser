@@ -17,10 +17,22 @@ struct ActivityJob: Identifiable, Hashable, Codable, Sendable {
     var lines: [ActivityLine]
     var exitCode: Int32?
     var durationMs: Int?
+    /// Best-effort live progress from brew's `==>` markers (running jobs).
+    /// Mirrors the Tauri `ActivityJob.progress`. See #57.
+    var progress: JobProgress?
 
     enum JobStatus: String, Codable, Sendable {
         case running, succeeded, failed, canceled
     }
+}
+
+/// Live progress for a running job, parsed from brew's `==>` output markers.
+/// Mirrors the Tauri `JobProgress` (`src/lib/types.ts`).
+struct JobProgress: Hashable, Codable, Sendable {
+    var phase: String          // "Pouring" | "Downloading" | "Installing" | …
+    var package: String        // current package (may be empty)
+    var current: Int           // 1-based index of the current unit
+    var total: Int?            // total units when known, else nil
 }
 
 /// One line of streamed output.

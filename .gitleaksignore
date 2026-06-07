@@ -1,0 +1,10 @@
+# gitleaks false positives, reviewed 2026-06-06 (pre-release security pass).
+# Format: <commit>:<file>:<rule>:<line>
+#
+# 1) `vulnScannedAtKey = "vuln.scannedAt…"` — a UserDefaults *key-name* constant
+#    (a dotted identifier), not an API key. The generic-api-key heuristic keys
+#    off the `…Key = "…"` shape.
+8ee39a4d568a7a88d2b89ede87efb6d44e46d676:native/Sources/BrewBrowserKit/AppModel.swift:generic-api-key:1390
+# 2) AGENTS.md prose ("Token limit approaching, …") — documentation about LLM
+#    context limits; the rule matched the word "Token".
+1a34e99b339702126ef0212595e3f06e3c6511a4:AGENTS.md:generic-api-key:939

@@ -23,6 +23,12 @@ Native macOS build under `native/`.
 | 09 | [Native ← Tauri parity roadmap (remaining gap)](./09-native-parity-roadmap.md) | 2026-06-06 | (planning doc) |
 | 10 | [Native parity polish, Sparkle end-to-end, "Brew Browser" rename](./10-native-parity-polish-sparkle-rename.md) | 2026-06-06 | `892cbdf`…`e08a377` |
 
+## Cross-cutting (both builds)
+
+| # | Task | Date | Branch |
+|---|---|---|---|
+| 11 | [Launch batch: upgrade-all fix + #58 + #57, native test target, security pass](./11-launch-batch-progress-category-upgrade.md) | 2026-06-07 | `feat/launch-batch-progress-category-upgrade` |
+
 ## Tauri track (`main`)
 
 Shipped Tauri app.

@@ -1,6 +1,24 @@
 # Active Context
 
-> ## ⚗️ Active branch: `experiment/native-swift-liquid-glass` (updated 2026-06-06)
+> ## 🚀 Active branch: `feat/launch-batch-progress-category-upgrade` (updated 2026-06-07)
+>
+> Off `main` (which now contains the native app + #51, merged via #56). This
+> branch is the **launch batch, both builds** — pending commit/PR:
+> - **Upgrade-all firehose fix** (non-fatal `brew upgrade` exits = success;
+>   closes ~20 issues), **#58** (category click → Library), **#57** (progress
+>   counts). All in Tauri + native.
+> - **Native test target** (0 → 36 tests, Swift Testing) + Rust fuzz tests.
+> - **Pre-release security pass** clean (cargo audit 0 vulns, semgrep 0, gitleaks
+>   clean; injection/path/CSP/signature review pass). `audit.toml` +
+>   `.gitleaksignore` added. See `tasks/2026-06/11-*` and `security.md` §19.
+> - QA: `cargo test` green, `npm run check` 0 errors, `swift build` + `swift test`
+>   (36) green. Runtime/MITM tests deferred (hands-on).
+> - **Next:** commit + push + PR; deploy still pending (native notarization).
+> - Filed #57/#58; six more Reddit feature requests triaged, NOT yet filed.
+>
+> ---
+>
+> ## ⚗️ Prior: `experiment/native-swift-liquid-glass` (2026-06-06)
 >
 > Off-`main` branch: native Swift 6 + SwiftUI + Liquid Glass (macOS 26) port of
 > the Tauri app, in `native/`. `main` is the shipped Tauri v0.5.0.

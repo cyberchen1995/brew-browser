@@ -150,7 +150,7 @@ export type BrewStreamEvent =
   | { kind: "started";  jobId: string; command: string; startedAt: string }
   | { kind: "stdout";   jobId: string; line: string; ts: string }
   | { kind: "stderr";   jobId: string; line: string; ts: string }
-  | { kind: "progress"; jobId: string; message: string; percent: number | null }
+  | { kind: "progress"; jobId: string; phase: string; package: string; current: number; total: number | null }
   | { kind: "exit";     jobId: string; exitCode: number; success: boolean; durationMs: number }
   | { kind: "canceled"; jobId: string }
   | { kind: "error";    jobId: string; error: BrewErrorPayload };
@@ -950,6 +950,15 @@ export interface ActivityJob {
   lines: ActivityLine[];
   exitCode?: number;
   durationMs?: number;
+  /** Best-effort live progress from brew's `==>` markers (running jobs). */
+  progress?: JobProgress;
+}
+
+export interface JobProgress {
+  phase: string;             // "Pouring" | "Downloading" | "Installing" | …
+  package: string;           // current package (may be empty)
+  current: number;           // 1-based index of the current unit
+  total: number | null;      // total units when known, else null
 }
 
 export interface ActivityLine {

@@ -63,6 +63,16 @@ let package = Package(
                 // CatalogService. ~6MB gzipped / ~44MB raw, so kept compressed.
                 .copy("Resources/catalog")
             ]
+        ),
+        // Unit tests for the pure, parity-critical logic — brew output parsing
+        // (friendly errors, non-fatal upgrade classification, progress markers),
+        // settings Codable contracts, category membership, vulns parsing.
+        // `@testable import` exposes the library's internal symbols. Runs with
+        // `swift test`; does not affect `swift build` / build-app.sh.
+        .testTarget(
+            name: "BrewBrowserKitTests",
+            dependencies: ["BrewBrowserKit"],
+            path: "Tests/BrewBrowserKitTests"
         )
     ]
 )

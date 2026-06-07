@@ -211,6 +211,22 @@
       </div>
     </header>
 
+    {#if activeJob?.status === "running" && activeJob.progress}
+      {@const p = activeJob.progress}
+      {@const pct = p.total ? Math.min(100, Math.round((p.current / p.total) * 100)) : null}
+      <div class="progress-row" role="status" aria-live="off">
+        <div class="progress-track">
+          <div
+            class="progress-fill {pct === null ? 'indeterminate' : ''}"
+            style:width={pct === null ? "40%" : `${pct}%`}
+          ></div>
+        </div>
+        <span class="progress-label mono">
+          {p.phase}{p.package ? ` ${p.package}` : ""}{p.total ? ` (${p.current} of ${p.total})` : ""}
+        </span>
+      </div>
+    {/if}
+
     {#if !ui.drawerMinimized}
       <!-- No job tabs: the drawer shows the running job (live) or whichever job
            you pick in the Activity panel. The panel is the single place to
@@ -308,6 +324,39 @@
   }
   .ctl:hover { background: var(--color-surface-sunken); color: var(--color-text-primary); }
 
+  /* Live progress bar for a running job (best-effort from brew `==>` markers). */
+  .progress-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .progress-track {
+    flex: 1;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--color-surface-sunken);
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: var(--color-accent, var(--color-success));
+    transition: width 200ms ease;
+  }
+  .progress-fill.indeterminate {
+    animation: progress-indeterminate 1.1s ease-in-out infinite;
+  }
+  @keyframes progress-indeterminate {
+    0%   { margin-left: -40%; }
+    100% { margin-left: 100%; }
+  }
+  .progress-label {
+    color: var(--color-text-muted);
+    font-size: var(--text-caption);
+    white-space: nowrap;
+  }
 
   .console {
     flex: 1;

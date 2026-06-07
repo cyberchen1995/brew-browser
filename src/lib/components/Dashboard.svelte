@@ -473,13 +473,19 @@
   let hoveredCategory = $state<string | null>(null);
 
   function jumpToCategory(slug: string) {
+    // This card is "Top categories in your library", so keep the user IN the
+    // Library, filtered to that category — not the full Discover catalog.
+    // Library already filters installed packages by discover.selectedCategories
+    // (Library.svelte). See #58.
     if (slug === "__other__") {
-      ui.setSection("discover");
+      // Uncategorized has no slug to filter on — just show the full library.
+      ui.setSection("library");
+      discover.clear();
       return;
     }
     // setSection FIRST: it clears chip filters on any real section change,
     // so selectOnly must come after. See ui.setSection().
-    ui.setSection("discover");
+    ui.setSection("library");
     discover.selectOnly(slug);
   }
 

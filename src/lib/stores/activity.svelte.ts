@@ -157,8 +157,15 @@ class ActivityStore {
         j.lines = [...j.lines, { stream: "stderr", text: evt.line, ts: evt.ts }];
         break;
       case "progress":
-        // soft-record progress as a line for now (UI can read percent later)
-        j.lines = [...j.lines, { stream: "stdout", text: `[progress] ${evt.message}`, ts: new Date().toISOString() }];
+        // Live best-effort progress from brew's `==>` markers. Stored on the
+        // job so the Activity drawer can render a determinate bar; the raw
+        // brew lines still stream through `stdout` for the full log.
+        j.progress = {
+          phase: evt.phase,
+          package: evt.package,
+          current: evt.current,
+          total: evt.total,
+        };
         break;
       case "exit":
         j.status = evt.success ? "succeeded" : "failed";

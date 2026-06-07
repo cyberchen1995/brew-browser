@@ -98,7 +98,77 @@ pub fn friendlify(stderr_excerpt: &str, command: &str) -> Option<String> {
         );
     }
 
+    // Pattern 4 — another brew process holds the lock. Environmental, not a
+    // bug in either brew or us: a concurrent `brew` (often a background
+    // `brew upgrade` or a second app) is running. Real shape:
+    //   Error: A `brew upgrade` process has already locked
+    //   /opt/homebrew/Cellar/ca-certificates. Please wait for it to finish…
+    if stderr_excerpt.contains("has already locked")
+        || stderr_excerpt.contains("Please wait for it to finish or terminate it")
+    {
+        return Some(
+            "Another Homebrew process is already running and holds the lock. \
+             Wait for it to finish (or quit the other process) and try again — \
+             this isn't a brew-browser problem."
+                .to_string(),
+        );
+    }
+
     None
+}
+
+/// True when a non-zero `brew upgrade`/`install` exit carries ONLY non-fatal
+/// warnings — the kind brew escalates to exit code 1 even though it actually
+/// did the work. These are the dominant source of bogus "Upgrade-all failed"
+/// reports (post-install warnings, link conflicts on a single keg, kegs that
+/// were installed-but-not-linked because another version is linked, an
+/// already-present binary that blocks the symlink). In every one of these
+/// cases the upgrade succeeded for the rest of the set; surfacing a red
+/// "failed" toast with a file-an-issue button is wrong.
+///
+/// Conservative by construction: returns `true` only when (a) the command is
+/// an upgrade/install, (b) at least one known non-fatal marker is present, and
+/// (c) no hard-fatal marker is present. Anything outside that falls through to
+/// the normal failure surface, so we never hide a real failure that lacks a
+/// recognized warning marker.
+pub fn upgrade_warnings_only(stderr_excerpt: &str, command: &str) -> bool {
+    let is_upgrade_or_install =
+        command.contains("upgrade") || command.contains("install");
+    if !is_upgrade_or_install {
+        return false;
+    }
+
+    // Hard-fatal signatures: if any of these is present, it's a real failure
+    // regardless of accompanying warnings — never downgrade to "warnings only".
+    const FATAL: &[&str] = &[
+        "No available formula",
+        "No such file or directory",
+        "Permission denied",
+        "Failed to download",
+        "Download failed",
+        "Could not resolve host",
+        "has already locked", // concurrent lock — handled as an env. failure
+        "Please report this issue:",
+        "Homebrew::Bundle::Brew::Topo",
+        "checksum does not match",
+        "SHA256 mismatch",
+    ];
+    if FATAL.iter().any(|f| stderr_excerpt.contains(f)) {
+        return false;
+    }
+
+    // Known non-fatal warning markers. brew exits 1 on these, but the work is
+    // done. (The `brew link` "Error:" line is intentionally treated as
+    // non-fatal here — it's a link conflict on one keg, not a failed upgrade.)
+    const NONFATAL: &[&str] = &[
+        "post-install step did not complete successfully",
+        "not linked because",
+        "already linked",
+        "skipping link",
+        "already a Binary at",
+        "`brew link` step did not complete successfully",
+    ];
+    NONFATAL.iter().any(|w| stderr_excerpt.contains(w))
 }
 
 // ---------- Tests ----------
@@ -260,4 +330,95 @@ These open issues may also help:
         );
     }
 
+    // ---- concurrent lock (Pattern 4) ----
+
+    #[test]
+    fn locked_pattern_matches() {
+        // Real shape from issue #52.
+        let stderr = "Error: A `brew upgrade` process has already locked /opt/homebrew/Cellar/ca-certificates.\nPlease wait for it to finish or terminate it to continue.\n";
+        let msg = friendlify(stderr, "brew upgrade").expect("locked pattern should match");
+        assert!(
+            msg.contains("Another Homebrew process"),
+            "friendly msg should call out the concurrent process; got {msg:?}"
+        );
+    }
+
+    // ---- upgrade_warnings_only ----
+
+    // Real stderr tails captured from the bogus "Upgrade-all failed" reports
+    // (#28, #53, #55). Each upgraded the set fine but exited 1 on a warning.
+    const WARN_POSTINSTALL: &str = "Warning: ffmpeg@7 was installed but not linked because ffmpeg is already linked.\nWarning: The post-install step did not complete successfully\n";
+    const WARN_SKIP_LINK: &str = "Warning: The post-install step did not complete successfully\nWarning: It seems there is already a Binary at '/opt/homebrew/bin/codex' from formula codex; skipping link.\n";
+    const WARN_LINK_STEP: &str = "Error: The `brew link` step did not complete successfully\n";
+
+    #[test]
+    fn upgrade_warnings_only_matches_postinstall_warning() {
+        assert!(upgrade_warnings_only(WARN_POSTINSTALL, "brew upgrade"));
+    }
+
+    #[test]
+    fn upgrade_warnings_only_matches_skip_link() {
+        assert!(upgrade_warnings_only(WARN_SKIP_LINK, "brew upgrade"));
+    }
+
+    #[test]
+    fn upgrade_warnings_only_matches_link_step_error() {
+        // The `brew link` "Error:" line is a non-fatal link conflict.
+        assert!(upgrade_warnings_only(WARN_LINK_STEP, "brew upgrade git"));
+    }
+
+    #[test]
+    fn upgrade_warnings_only_false_on_real_failure() {
+        // A genuine download failure must NOT be downgraded to warnings even
+        // if a post-install warning rode along earlier in the output.
+        let mixed = "Warning: The post-install step did not complete successfully\nError: Failed to download resource \"foo\"\n";
+        assert!(!upgrade_warnings_only(mixed, "brew upgrade"));
+    }
+
+    #[test]
+    fn upgrade_warnings_only_false_on_lock() {
+        let locked = "Error: A `brew upgrade` process has already locked /opt/homebrew/Cellar/x.\n";
+        assert!(!upgrade_warnings_only(locked, "brew upgrade"));
+    }
+
+    #[test]
+    fn upgrade_warnings_only_gated_to_upgrade_install() {
+        // Same warning text on a non-upgrade command must not classify.
+        assert!(!upgrade_warnings_only(WARN_POSTINSTALL, "brew services list"));
+    }
+
+    #[test]
+    fn upgrade_warnings_only_false_when_no_marker() {
+        assert!(!upgrade_warnings_only("✔︎ Bottle foo (1.0)\n", "brew upgrade"));
+    }
+
+    // ---- robustness / fuzz (no panic on adversarial input) ----
+
+    #[test]
+    fn classifiers_never_panic_on_adversarial_input() {
+        // brew stderr is semi-trusted; harden the substring scanners against
+        // empty, huge, multibyte, control-char, and near-miss inputs.
+        let mut inputs: Vec<String> = vec![
+            String::new(),
+            " ".into(),
+            "\n\0\t".into(),
+            "Error:".into(),
+            "Warning:".into(),
+            "post-install step did not complete successfully".into(),
+            "has already locked".into(),
+        ];
+        inputs.push("A".repeat(200_000));
+        inputs.push("日本語".repeat(20_000));
+        inputs.push((0u8..=255).map(|b| b as char).collect()); // all Latin-1 code points
+        inputs.push("\u{0}\u{1}\u{2}\u{7f}control".into());
+
+        let commands = ["", "brew upgrade", "brew install x", "brew services start y", "brew bundle dump"];
+        for inp in &inputs {
+            for cmd in commands {
+                // Sole assertion is "returns without panicking".
+                let _ = friendlify(inp, cmd);
+                let _ = upgrade_warnings_only(inp, cmd);
+            }
+        }
+    }
 }

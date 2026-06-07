@@ -36,6 +36,9 @@ struct ActivityDrawer: View {
             VStack(spacing: 0) {
                 Divider()
                 header(job)
+                if job.status == .running, let p = job.progress {
+                    progressBar(p)
+                }
                 if model.drawerOpen {
                     console(job)
                     footer(job)
@@ -102,6 +105,37 @@ struct ActivityDrawer: View {
         .padding(.vertical, 8)
         .contentShape(.rect)
         .onTapGesture { model.drawerOpen.toggle() }
+    }
+
+    /// Live determinate progress bar from brew's `==>` markers (#57). Shows a
+    /// determinate bar once a total is known, an indeterminate linear bar
+    /// otherwise. Mirrors the Tauri Activity drawer's progress row.
+    private func progressBar(_ p: JobProgress) -> some View {
+        HStack(spacing: 8) {
+            if let total = p.total, total > 0 {
+                ProgressView(value: Double(min(p.current, total)), total: Double(total))
+                    .progressViewStyle(.linear)
+                    .frame(maxWidth: .infinity)
+            } else {
+                ProgressView()
+                    .progressViewStyle(.linear)
+                    .frame(maxWidth: .infinity)
+            }
+            Text(Self.progressLabel(p))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
+    }
+
+    static func progressLabel(_ p: JobProgress) -> String {
+        var s = p.phase
+        if !p.package.isEmpty { s += " \(p.package)" }
+        if let total = p.total { s += " (\(p.current) of \(total))" }
+        return s
     }
 
     private func console(_ job: ActivityJob) -> some View {

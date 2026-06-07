@@ -276,8 +276,17 @@ struct VulnsService: Sendable {
         }
         // Per-package findings — the detail card reads this cache so it never has
         // to re-run a (whole-install) scan just to show one package.
+        return try Self.parseScanOutputKeyed(result.stdout)
+    }
+
+    /// Parse a `brew vulns --json` payload and key findings by `formula` — the
+    /// exact transform `scanAll` performs. Exposed (internal) for tests: this
+    /// is where the "attribute each finding to the right package, never smear
+    /// the whole set onto every formula" contract lives — the bug behind the
+    /// 1500-CVE over-report. Mirrors the Rust keying in `vulns::client`.
+    static func parseScanOutputKeyed(_ raw: String) throws -> [String: [VulnFinding]] {
         var out: [String: [VulnFinding]] = [:]
-        for record in try Self.parseScanOutput(result.stdout) where !record.formula.isEmpty {
+        for record in try parseScanOutput(raw) where !record.formula.isEmpty {
             out[record.formula] = record.findings
         }
         return out

@@ -466,3 +466,27 @@ defined roles). See [[project-native-swift-rebuild]] cross-session memory.
   duplicate-on-update migration for shipped 0.5.0 users in release notes).
 - **Versions stay independent** (native 0.1.0, Tauri 0.5.0) — separate apps,
   separate bundle ids + update feeds; no edition marker / no "n" suffix.
+
+### 2026-06-07: Launch-batch decisions (upgrade-all classification, native tests, dep posture)
+**Status:** Approved + implemented (`tasks/2026-06/11-*`).
+- **Non-fatal `brew upgrade` exits count as SUCCESS.** `brew upgrade` returns
+  exit 1 on post-install warnings, link conflicts, and already-linked/already-
+  present kegs even though it did the work — the cause of ~20 bogus "Upgrade-all
+  failed" reports. Both builds now classify those (allowlist of non-fatal
+  markers + a hard-fatal denylist) and present success, suppressing the
+  file-an-issue CTA. Conservative: any hard-fatal signature (download/checksum/
+  lock/report-this) still fails. Logic is `error_patterns::upgrade_warnings_only`
+  (Rust) / `BrewOutputParsing.upgradeWarningsOnly` (Swift), unit-tested both sides.
+- **Progress is best-effort + heuristic.** Parsed from brew's `==>` markers; no
+  total ⇒ indeterminate bar; never blocks the stream. Unknown output = no tick.
+- **Native gets a real test target.** Swift Testing + `@testable`, fixtures
+  mirroring the Rust tests (the parity guarantee). Two prod tweaks to enable it:
+  extracted `VulnsService.parseScanOutputKeyed`; `SettingsDTO` `private`→`internal`.
+  The shared-catalog refactor (one JSON of brew-output rules consumed by both
+  languages) remains the deferred post-launch cleanup.
+- **Dependency posture:** the npm `cookie <0.7.0` low advisory is **accepted, not
+  forced.** It's transitive via SvelteKit with no real surface in a desktop app,
+  and forcing `cookie@0.7` under a SvelteKit that declares `0.6` risks a real
+  runtime bug — a worse trade than a low advisory. The 17 unmaintained Rust
+  warnings are Linux-only GTK3/glib deps (no CVEs, not built on macOS),
+  documented + ignored in `src-tauri/.cargo/audit.toml`. Full audit: `security.md` §19.

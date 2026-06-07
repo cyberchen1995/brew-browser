@@ -21,7 +21,7 @@ use tokio::process::Command;
 use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
-use crate::brew::error_patterns::friendlify;
+use crate::brew::error_patterns::{friendlify, upgrade_warnings_only};
 use crate::error::{truncate_tail, BrewError};
 use crate::state::JobHandle;
 use crate::types::{BrewStreamEvent, JobResult};
@@ -143,10 +143,23 @@ pub async fn run_brew_streaming(
         if let Some(stdout) = stdout {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
+            let mut progress = ProgressParser::new();
             loop {
                 match lines.next_line().await {
                     Ok(Some(line)) => {
                         let line = clamp_line(line);
+                        // Heuristic progress from brew's `==>` markers (best
+                        // effort; never blocks the stream). Emitted alongside
+                        // the raw line so the UI can show a determinate bar.
+                        if let Some(p) = progress.observe(&line) {
+                            let _ = stdout_chan.send(BrewStreamEvent::Progress {
+                                job_id,
+                                phase: p.phase,
+                                package: p.package,
+                                current: p.current,
+                                total: p.total,
+                            });
+                        }
                         let _ = stdout_chan.send(BrewStreamEvent::Stdout {
                             job_id,
                             line,
@@ -222,25 +235,37 @@ pub async fn run_brew_streaming(
                 return Err(BrewError::Canceled);
             }
 
+            // Snapshot stderr only on a non-zero exit (cheap path on success).
+            let excerpt = if success {
+                String::new()
+            } else {
+                let buf = stderr_buf.lock().await;
+                buf.snapshot()
+            };
+
+            // brew exits 1 on non-fatal upgrade/install warnings (post-install
+            // warnings, link conflicts, already-linked kegs) even though the
+            // work completed. Treat those as success — they were the dominant
+            // source of bogus "Upgrade-all failed" reports. See error_patterns.
+            let warnings_only =
+                !success && upgrade_warnings_only(&excerpt, &display_command);
+            let effective_success = success || warnings_only;
+
             let _ = on_event.send(BrewStreamEvent::Exit {
                 job_id,
                 exit_code,
-                success,
+                success: effective_success,
                 duration_ms,
             });
 
-            if success {
+            if effective_success {
                 Ok(JobResult {
                     job_id,
                     exit_code,
-                    success,
+                    success: effective_success,
                     duration_ms,
                 })
             } else {
-                let excerpt = {
-                    let buf = stderr_buf.lock().await;
-                    buf.snapshot()
-                };
                 let friendly_message = friendlify(&excerpt, &display_command);
                 Err(BrewError::BrewExitNonZero {
                     command: display_command,
@@ -272,6 +297,110 @@ fn clamp_line(line: String) -> String {
             end -= 1;
         }
         format!("{}…[truncated]", &line[..end])
+    }
+}
+
+/// A single progress observation derived from one `==>` line.
+struct ProgressTick {
+    phase: String,
+    package: String,
+    current: u32,
+    total: Option<u32>,
+}
+
+/// Best-effort progress tracker over brew's stdout `==>` markers. Stateful:
+/// learns the total from "Upgrading N outdated packages:" /
+/// "Installing dependencies for X: a, b, c", and advances a per-package
+/// counter as work markers (Pouring / Installing / Upgrading) name new
+/// packages. Heuristic by design — unrecognized output simply yields no tick,
+/// so the stream and exit handling are never affected.
+struct ProgressParser {
+    total: Option<u32>,
+    current: u32,
+    last_package: Option<String>,
+}
+
+impl ProgressParser {
+    fn new() -> Self {
+        Self { total: None, current: 0, last_package: None }
+    }
+
+    /// Extract a package name from the remainder of a work marker.
+    /// `Pouring foo--1.2.arm64.bottle.tar.gz` → `foo`; `Installing foo` → `foo`.
+    fn pkg_name(rest: &str) -> String {
+        let first = rest.split_whitespace().next().unwrap_or("");
+        match first.find("--") {
+            Some(idx) => first[..idx].to_string(),
+            None => first.to_string(),
+        }
+    }
+
+    fn observe(&mut self, line: &str) -> Option<ProgressTick> {
+        let t = line.trim_start();
+        let rest = t.strip_prefix("==> ")?;
+
+        // Total from the upgrade header: "Upgrading 32 outdated packages:".
+        if let Some(r) = rest.strip_prefix("Upgrading ") {
+            if r.contains("outdated package") {
+                if let Some(n) = r.split_whitespace().next().and_then(|w| w.parse::<u32>().ok()) {
+                    self.total = Some(n);
+                }
+                return None;
+            }
+            // Otherwise "Upgrading <pkg>" — fall through to the work markers.
+        }
+
+        // Total from a dependency list: "Installing dependencies for foo: a, b".
+        if rest.starts_with("Installing dependencies for ") {
+            if let Some(list) = rest.splitn(2, ':').nth(1) {
+                let n = list.split(',').filter(|s| !s.trim().is_empty()).count() as u32;
+                if n > 0 {
+                    // +1 for the target formula itself.
+                    self.total = Some(self.total.map_or(n + 1, |x| x.max(n + 1)));
+                }
+            }
+            return None;
+        }
+
+        // Per-package work markers — advance the counter on a new package.
+        for kw in ["Pouring ", "Installing ", "Upgrading "] {
+            if let Some(r) = rest.strip_prefix(kw) {
+                let pkg = Self::pkg_name(r);
+                if pkg.is_empty() {
+                    continue;
+                }
+                if self.last_package.as_deref() != Some(pkg.as_str()) {
+                    self.current += 1;
+                    self.last_package = Some(pkg.clone());
+                }
+                return Some(ProgressTick {
+                    phase: kw.trim_end().to_string(),
+                    package: pkg,
+                    current: self.current,
+                    total: self.total,
+                });
+            }
+        }
+
+        // Phase-only markers — update the phase without advancing the counter.
+        for kw in ["Downloading ", "Fetching "] {
+            if let Some(r) = rest.strip_prefix(kw) {
+                let pkg = if kw.starts_with("Fetching") {
+                    Self::pkg_name(r)
+                } else {
+                    // Downloading carries a URL, not a package — keep the last.
+                    self.last_package.clone().unwrap_or_default()
+                };
+                return Some(ProgressTick {
+                    phase: kw.trim_end().to_string(),
+                    package: pkg,
+                    current: self.current,
+                    total: self.total,
+                });
+            }
+        }
+
+        None
     }
 }
 
@@ -394,5 +523,72 @@ mod tests {
         assert!(snap.len() <= 8);
         // The kept tail must end with one of the source chars.
         assert!(s.ends_with(&snap) || snap.is_empty());
+    }
+
+    #[test]
+    fn progress_parses_upgrade_sequence() {
+        let mut p = ProgressParser::new();
+        // Header sets the total but is not itself a tick.
+        assert!(p.observe("==> Upgrading 3 outdated packages:").is_none());
+        // Non-marker lines are ignored.
+        assert!(p.observe("foo 1.0 -> 1.1").is_none());
+
+        let t1 = p.observe("==> Pouring foo--1.1.arm64.bottle.tar.gz").unwrap();
+        assert_eq!((t1.phase.as_str(), t1.package.as_str(), t1.current, t1.total),
+                   ("Pouring", "foo", 1, Some(3)));
+
+        // Downloading updates phase without advancing the counter.
+        let t2 = p.observe("==> Downloading https://example.com/bar.bottle").unwrap();
+        assert_eq!((t2.phase.as_str(), t2.current), ("Downloading", 1));
+
+        let t3 = p.observe("==> Pouring bar--2.0.arm64.bottle.tar.gz").unwrap();
+        assert_eq!((t3.package.as_str(), t3.current), ("bar", 2));
+
+        // Repeating the same package's phase does not double-count.
+        let t4 = p.observe("==> Installing bar").unwrap();
+        assert_eq!(t4.current, 2);
+    }
+
+    #[test]
+    fn progress_total_from_dependency_list() {
+        let mut p = ProgressParser::new();
+        assert!(p.observe("==> Installing dependencies for wget: openssl@3, ca-certificates").is_none());
+        let t = p.observe("==> Installing openssl@3").unwrap();
+        assert_eq!(t.total, Some(3)); // 2 deps + the target
+    }
+
+    #[test]
+    fn progress_parser_robust_against_adversarial_lines() {
+        // stdout from brew is semi-trusted; the marker parser must never panic
+        // (e.g. integer overflow on the package count) and the counter must be
+        // monotonic non-decreasing.
+        let mut p = ProgressParser::new();
+        let lines: Vec<String> = vec![
+            "".into(),
+            "==>".into(),
+            "==> ".into(),
+            "==> Pouring".into(),
+            "==> Pouring ".into(),
+            "==> Pouring --".into(),
+            "==> Pouring foo--".into(),
+            "==> Upgrading 4294967296 outdated packages:".into(), // > u32::MAX → parse fails gracefully
+            "==> Upgrading 999999999999999999999 outdated packages:".into(),
+            "==> Upgrading -1 outdated packages:".into(),
+            "==> Installing dependencies for x:".into(),
+            "==> Installing dependencies for x: ,, , ,".into(),
+            "==> Fetching ".into(),
+            "==> Downloading ".into(),
+            "==> Pouring x--".to_string() + &"y".repeat(100_000),
+            "日本語==> Pouring 日本--1.0".into(),
+        ];
+        let mut last: u32 = 0;
+        for _ in 0..200 {
+            for l in &lines {
+                if let Some(t) = p.observe(l) {
+                    assert!(t.current >= last, "counter must be monotonic");
+                    last = t.current;
+                }
+            }
+        }
     }
 }
