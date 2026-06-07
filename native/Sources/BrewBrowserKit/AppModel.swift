@@ -144,6 +144,18 @@ public final class AppModel {
     /// entry points set `.outdated` (Updates) or `.all` (installed / search).
     var libraryFilter: LibraryFilter = .all
 
+    /// Active category filter for the Library, set by tapping a slice in the
+    /// Dashboard "Top categories in your library" card. `nil` = no category
+    /// filter. Mirrors the Tauri behavior where that card filters the Library
+    /// (installed packages), not the full Discover catalog. See #58.
+    var libraryCategory: String? = nil
+
+    /// Human label for the active Library category filter (for the chip).
+    var libraryCategoryLabel: String? {
+        guard let slug = libraryCategory else { return nil }
+        return categoryCatalog?.allCategories().first { $0.slug == slug }?.label ?? slug
+    }
+
     /// Sort order for the Library `Table`, bound to its `sortOrder:`. Defaults
     /// to ascending by name (the stock first-column-ascending convention).
     var librarySort: [KeyPathComparator<LibraryRow>] = [
@@ -175,6 +187,10 @@ public final class AppModel {
             case .vulnerable: guard (vuln?.total ?? 0) > 0 else { return nil }
             }
             if !q.isEmpty, !pkg.name.localizedCaseInsensitiveContains(q) { return nil }
+            if let slug = libraryCategory,
+               !(categoryCatalog?.isMember(token: pkg.name, kind: pkg.kind, slug: slug) ?? false) {
+                return nil
+            }
             let entry = showSummary ? enrichmentEntry(for: pkg.name) : nil
             let friendly = entry?.friendlyName ?? ""
             return LibraryRow(
@@ -531,6 +547,7 @@ public final class AppModel {
     func openInLibrary(_ pkg: InstalledPackage) {
         globalQuery = pkg.name
         libraryFilter = .all
+        libraryCategory = nil
         selection = .library
     }
 
@@ -538,6 +555,7 @@ public final class AppModel {
     func openLibrary() {
         globalQuery = ""
         libraryFilter = .all
+        libraryCategory = nil
         selection = .library
     }
 
@@ -545,7 +563,25 @@ public final class AppModel {
     func openOutdatedInLibrary() {
         globalQuery = ""
         libraryFilter = .outdated
+        libraryCategory = nil
         selection = .library
+    }
+
+    /// Jump to the Library filtered to a category — the click target for the
+    /// Dashboard "Top categories in your library" card. Shows the user's
+    /// INSTALLED packages in that category, not the full Discover catalog (#58).
+    func jumpToLibraryCategory(_ slug: String) {
+        globalQuery = ""
+        libraryFilter = .all
+        // Empty / "other" buckets have no real slug to filter on — just open
+        // the full library.
+        libraryCategory = (slug.isEmpty || slug == "__other__" || slug == "other") ? nil : slug
+        selection = .library
+    }
+
+    /// Clear the active Library category filter (the chip's ✕).
+    func clearLibraryCategory() {
+        libraryCategory = nil
     }
 
     /// Open Library filtered to packages with known vulnerabilities. Used by the
@@ -1742,6 +1778,7 @@ public final class AppModel {
         }
 
         var exit: Int32 = 0
+        var progressParser = BrewProgressParser()
         let stream = brew.runStreaming(jobId: jobId, args)
         for await event in stream {
             guard let idx = jobs.firstIndex(where: { $0.id == jobId }) else { continue }
@@ -1751,18 +1788,38 @@ public final class AppModel {
                 if jobs[idx].lines.count > Self.maxLinesPerJob {
                     jobs[idx].lines.removeFirst(jobs[idx].lines.count - Self.maxLinesPerJob)
                 }
+                // Best-effort live progress from brew's `==>` markers (#57).
+                if !isStderr, let p = progressParser.observe(l) {
+                    jobs[idx].progress = p
+                }
             case .finished(let code):
                 exit = code
             }
         }
 
-        let ok = exit == 0
         let canceled = exit == 130 || exit == 143
+        // brew exits 1 on non-fatal upgrade/install warnings (post-install
+        // warnings, link conflicts, already-linked kegs) even though the work
+        // completed — treat those as success so we don't show a scary "failed"
+        // job + report button. This was the dominant source of bogus
+        // "Upgrade-all failed" reports. See BrewErrorPatterns.upgradeWarningsOnly.
+        var ok = exit == 0
+        if !ok, !canceled {
+            let stderrText = jobs.first(where: { $0.id == jobId })?
+                .lines.filter { $0.stream == .stderr }.map(\.text).joined(separator: "\n") ?? ""
+            if BrewErrorPatterns.upgradeWarningsOnly(
+                stderr: stderrText,
+                command: "brew " + args.joined(separator: " ")
+            ) {
+                ok = true
+            }
+        }
         if let idx = jobs.firstIndex(where: { $0.id == jobId }) {
             // exit 130/143 = SIGINT/SIGTERM → treat as canceled.
             jobs[idx].status = ok ? .succeeded : (canceled ? .canceled : .failed)
             jobs[idx].exitCode = exit
             jobs[idx].durationMs = Int((Date().timeIntervalSince1970 - startedAt) * 1000)
+            jobs[idx].progress = nil   // clear live progress once finished
         }
         // Background completion → macOS notification (opt-in; foreground uses
         // the Activity drawer). No-op unless enabled + app not frontmost.

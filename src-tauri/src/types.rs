@@ -219,15 +219,21 @@ pub enum BrewStreamEvent {
         line: String,
         ts: String,
     },
-    /// Reserved for future heuristic progress events derived from
-    /// brew's `==>` markers. Not currently emitted; kept in the wire
-    /// schema so the frontend can match on it without a backend bump.
-    #[allow(dead_code)]
+    /// Heuristic progress derived from brew's `==>` markers (best-effort).
+    /// `total` is `None` until brew announces a count (e.g.
+    /// "Upgrading 32 outdated packages:"); the frontend renders a
+    /// determinate bar when `total` is known, a spinner otherwise.
     #[serde(rename_all = "camelCase")]
     Progress {
         job_id: Uuid,
-        message: String,
-        percent: Option<f32>,
+        /// "Downloading" | "Fetching" | "Pouring" | "Installing" | "Upgrading".
+        phase: String,
+        /// Current package name (best-effort; empty when not parseable).
+        package: String,
+        /// 1-based index of the current unit of work.
+        current: u32,
+        /// Total units when known.
+        total: Option<u32>,
     },
     #[serde(rename_all = "camelCase")]
     Exit {

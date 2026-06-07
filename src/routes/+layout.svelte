@@ -7,6 +7,8 @@
   import { activity } from "$lib/stores/activity.svelte";
   import { services } from "$lib/stores/services.svelte";
   import { settings } from "$lib/stores/settings.svelte";
+  import { vulnerabilities } from "$lib/stores/vulnerabilities.svelte";
+  import { github } from "$lib/stores/github.svelte";
 
   let { children } = $props();
 
@@ -23,20 +25,34 @@
     // Phase 12d — hydrate the persisted settings.json into the renderer
     // so the Network section, the Catalog stale banner, and the cask
     // icon mode all read from one source of truth.
-    void settings.load();
+    //
+    // After settings load, hydrate the persisted vulnerability cache so the
+    // Dashboard Exposure card + the sidebar count badge reflect the last scan
+    // on first paint — instead of looking "never scanned" every launch. This
+    // is cache-cheap: scanIfNeeded → scanAll(false) hits the backend's
+    // fingerprint-skip and returns the on-disk `vulns_cache.json` report
+    // without re-running `brew vulns` when the install set is unchanged. It's
+    // gated internally on the opt-in toggle (no-op + no network when off), and
+    // it's fire-and-forget so it never blocks launch. See `vulns_cache.json`.
+    void settings.load().then(() => {
+      void vulnerabilities.scanIfNeeded().catch(() => {});
+      // Hydrate GitHub sign-in status so the Dashboard GitHub card + toolbar
+      // chip reflect a signed-in user on first paint. Previously this was
+      // deliberately NOT done — the worry was that reading the Keychain
+      // prompts on every launch. That only holds for unsigned `tauri dev`
+      // builds, whose code identity churns each rebuild. For a signed release
+      // the Keychain ACL is bound to the Developer-ID designated requirement
+      // (stable across app updates), so a signed-in user's read is SILENT, and
+      // a never-signed-in user's read finds nothing and shows no prompt.
+      // Gated on the GitHub toggle + paranoid/offline so a user who hasn't
+      // enabled GitHub never triggers a Keychain read. Fire-and-forget.
+      if (settings.effective.githubEnabled && !settings.effective.paranoidMode) {
+        void github.loadStatus().catch(() => {});
+      }
+    });
     // Prime the services list so the sidebar's "Services" badge can show a
     // count from first paint; the Services tab refreshes again on mount.
     void services.load();
-    // NOTE: GitHub sign-in status is intentionally NOT hydrated here.
-    // `github.loadStatus()` reads from macOS Keychain, which prompts
-    // the user the first time a new app binary tries to access an
-    // existing entry. Probing on every app launch trains users to
-    // dismiss the prompt without reading it, and is intrusive when
-    // they have no intention of using GitHub features.
-    // Instead: probe lazily — `requireGithubSignIn()` (in PackageDetail)
-    // awaits loadStatus on first action click, and Settings → GitHub
-    // calls loadStatus when its panel mounts. Both contexts are
-    // user-initiated, so a Keychain prompt is contextual and expected.
 
     // Native macOS menu bridge — Rust emits `menu:about` / `menu:settings`
     // when the user picks those items from the App menu in the system menu

@@ -280,6 +280,9 @@ struct LibraryView: View {
             } else {
                 VStack(spacing: 0) {
                     filterBar
+                    if let label = model.libraryCategoryLabel {
+                        categoryChip(label)
+                    }
                     Divider()
                     table
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -318,6 +321,32 @@ struct LibraryView: View {
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    // Removable chip showing the active category filter (set by tapping a
+    // slice in the Dashboard "Top categories" card). Mirrors the Tauri
+    // Library chip-bar. See #58.
+    private func categoryChip(_ label: String) -> some View {
+        HStack(spacing: 6) {
+            Button {
+                model.clearLibraryCategory()
+            } label: {
+                HStack(spacing: 4) {
+                    Text(label)
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.callout)
+                .padding(.vertical, 3)
+                .padding(.horizontal, 8)
+                .background(Color.secondary.opacity(0.12), in: .capsule)
+            }
+            .buttonStyle(.plain)
+            .help("Clear category filter")
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
     }
 
     @ViewBuilder

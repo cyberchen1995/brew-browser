@@ -466,3 +466,63 @@ defined roles). See [[project-native-swift-rebuild]] cross-session memory.
   duplicate-on-update migration for shipped 0.5.0 users in release notes).
 - **Versions stay independent** (native 0.1.0, Tauri 0.5.0) — separate apps,
   separate bundle ids + update feeds; no edition marker / no "n" suffix.
+
+### 2026-06-07: Launch-batch decisions (upgrade-all classification, native tests, dep posture)
+**Status:** Approved + implemented (`tasks/2026-06/11-*`).
+- **Non-fatal `brew upgrade` exits count as SUCCESS.** `brew upgrade` returns
+  exit 1 on post-install warnings, link conflicts, and already-linked/already-
+  present kegs even though it did the work — the cause of ~20 bogus "Upgrade-all
+  failed" reports. Both builds now classify those (allowlist of non-fatal
+  markers + a hard-fatal denylist) and present success, suppressing the
+  file-an-issue CTA. Conservative: any hard-fatal signature (download/checksum/
+  lock/report-this) still fails. Logic is `error_patterns::upgrade_warnings_only`
+  (Rust) / `BrewOutputParsing.upgradeWarningsOnly` (Swift), unit-tested both sides.
+- **Progress is best-effort + heuristic.** Parsed from brew's `==>` markers; no
+  total ⇒ indeterminate bar; never blocks the stream. Unknown output = no tick.
+- **Native gets a real test target.** Swift Testing + `@testable`, fixtures
+  mirroring the Rust tests (the parity guarantee). Two prod tweaks to enable it:
+  extracted `VulnsService.parseScanOutputKeyed`; `SettingsDTO` `private`→`internal`.
+  The shared-catalog refactor (one JSON of brew-output rules consumed by both
+  languages) remains the deferred post-launch cleanup.
+- **Dependency posture:** the npm `cookie <0.7.0` low advisory is **accepted, not
+  forced.** It's transitive via SvelteKit with no real surface in a desktop app,
+  and forcing `cookie@0.7` under a SvelteKit that declares `0.6` risks a real
+  runtime bug — a worse trade than a low advisory. The 17 unmaintained Rust
+  warnings are Linux-only GTK3/glib deps (no CVEs, not built on macOS),
+  documented + ignored in `src-tauri/.cargo/audit.toml`. Full audit: `security.md` §19.
+
+### 2026-06-07: GitHub keychain (combined item), launch hydration, Tauri name revert, catalog source
+**Status:** Approved + implemented (`tasks/2026-06/11-*`, commits `57f6f5f`…).
+- **GitHub credential = ONE combined Keychain item (`github_credential_v1`),
+  ported FROM the native build.** The Tauri 3-item layout + `kSecMatchLimitAll`
+  batch (#37) was wrong on two counts: the batch *silently skips* consent-
+  required items (status read returned empty after a successful sign-in →
+  "signed in but Settings don't update"), and 3 items = 3 prompts under a
+  churning identity. Native had already solved this (`GitHubService.swift`
+  `github_credential_v1`); we ported it back (reverse-parity gap, native→Tauri).
+  One item = one access = one prompt. Reads migrate the legacy 3 items in; writes
+  delete-then-recreate so the writing binary owns the ACL.
+- **Keychain churn is a `tauri dev` artifact, NOT a code bug.** Unsigned dev
+  builds get a new code identity each rebuild → macOS re-prompts and login won't
+  "stick." A signed/stable build (Developer-ID DR-based ACL) signs in once and
+  stays. Don't chase keychain persistence in `tauri dev`; verify on a signed build.
+- **Hydrate persisted state on launch.** The Dashboard GitHub card + vuln
+  Exposure card + sidebar badges were empty every launch because the frontend
+  never loaded the backend cache/keychain at startup (deliberately lazy). Now
+  `+layout` hydrates GitHub status + the vuln cache after settings load (gated on
+  the opt-in toggles, fire-and-forget). The old "don't probe Keychain on launch"
+  worry only applies to unsigned dev builds.
+- **Revert the Tauri app display name to `brew-browser`.** "Brew Browser"
+  changed the bundle on disk (`brew-browser.app` → `Brew Browser.app`), which to
+  macOS is a different app → shipped users would lose Keychain + window state on
+  auto-update. Not worth it. Native keeps "Brew Browser" (no shipped users).
+- **Bundled catalog stays the model for now (refresh per release).** The app
+  ships its own `catalog/*.json.gz` snapshot AND the user's machine already has
+  Homebrew's always-fresh `~/Library/Caches/Homebrew/api/internal/packages.<plat>.jws.json`
+  (14 MB, JWS-signed). Reading brew's cache would kill the staleness + the
+  duplication, but it's JWS-signed, the filename/format is a brew INTERNAL that
+  changes across versions (`formula.jws.json` → `packages.<plat>.jws.json`), and
+  it's absent on a never-run-brew machine. So the stable public-API + bundled-
+  snapshot path stays; a hybrid (prefer brew's cache, fall back to bundled) is a
+  deferred roadmap item. Interim: regenerate the bundle each release via
+  `tools/catalog/fetch.py` (done 2026-06-07: as_of now, 8404 formulae / 7703 casks).

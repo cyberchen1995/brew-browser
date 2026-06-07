@@ -485,6 +485,10 @@ struct CategoriesCard: View {
         .onHover { inside in
             hovered = inside ? cat.slug : (hovered == cat.slug ? nil : hovered)
         }
+        // Click a category → show your INSTALLED packages in it (Library),
+        // not the whole Discover catalog. See #58.
+        .onTapGesture { model.jumpToLibraryCategory(cat.slug) }
+        .help("Show your installed \(cat.label) packages")
     }
 }
 

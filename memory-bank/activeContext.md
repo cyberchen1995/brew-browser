@@ -1,6 +1,38 @@
 # Active Context
 
-> ## ⚗️ Active branch: `experiment/native-swift-liquid-glass` (updated 2026-06-06)
+> ## 🚀 Active branch: `feat/launch-batch-progress-category-upgrade` (updated 2026-06-07)
+>
+> Off `main` (which now contains the native app + #51, merged via #56). This
+> branch is the **launch batch, both builds** — pending commit/PR:
+> - **Upgrade-all firehose fix** (non-fatal `brew upgrade` exits = success;
+>   closes ~20 issues), **#58** (category click → Library), **#57** (progress
+>   counts). All in Tauri + native.
+> - **Native test target** (0 → 36 tests, Swift Testing) + Rust fuzz tests.
+> - **Pre-release security pass** clean (cargo audit 0 vulns, semgrep 0, gitleaks
+>   clean; injection/path/CSP/signature review pass). `audit.toml` +
+>   `.gitleaksignore` added. See `tasks/2026-06/11-*` and `security.md` §19.
+> - **Docs + landing** rewritten for **both builds** (README/SECURITY/CONTRIBUTING +
+>   Hall of fame for @neodave/#46); new dashboard screenshots; **landing page
+>   published live** to brew-browser.zerologic.com (rsync, no `--delete`).
+> - **Post-batch fixes (commits `57f6f5f`…):** GitHub keychain → ONE combined
+>   item (`github_credential_v1`, ported from native; one prompt, status
+>   hydrates); launch hydration of vuln cache + GitHub status; Tauri name
+>   reverted to `brew-browser`; bundled catalog refreshed (as_of 2026-06-07).
+> - **Keychain "won't stick" was `tauri dev` identity churn** — verify
+>   persistence on a SIGNED build, not dev. See `decisions.md` 2026-06-07.
+> - QA: `cargo test` green (110 github), `npm run check` 0 errors, `swift test`
+>   36 green. Runtime/MITM + signed-build keychain smoke test still pending.
+> - **Next: merge PR #60 → main, then BUILD + DEPLOY** (Tauri 0.5.1 sign+notarize;
+>   native first notarized release via `release.sh`). Smoke-test sign-in
+>   persistence on the signed build before shipping.
+> - Filed #57/#58; six Reddit feature requests triaged, NOT yet filed. Deferred
+>   roadmap: catalog-from-brew-cache hybrid; docs/landing brand still "Brew Browser".
+> - Build host: ssh `umacbookpro` (see auto-memory [[reference-build-host]]) — one
+>   web root serves landing + `updater.json`; never `rsync --delete` it.
+>
+> ---
+>
+> ## ⚗️ Prior: `experiment/native-swift-liquid-glass` (2026-06-06)
 >
 > Off-`main` branch: native Swift 6 + SwiftUI + Liquid Glass (macOS 26) port of
 > the Tauri app, in `native/`. `main` is the shipped Tauri v0.5.0.

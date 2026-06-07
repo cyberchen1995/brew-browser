@@ -65,7 +65,10 @@ public enum CaskIconMode: String, Codable, Sendable, CaseIterable {
 /// forward/back compatibility (an older app reading a newer file, or vice
 /// versa). See the per-field `#[serde(default)]` annotations in
 /// `commands/settings.rs` ~L106-163.
-private struct SettingsDTO: Codable {
+// Internal (not private) so the test target can exercise the forward-compat
+// decode contract (`decodeIfPresent` → defaults) via `@testable`. Still
+// module-internal — not part of the public API.
+struct SettingsDTO: Codable {
     var paranoidMode: Bool
     var catalogAutoRefresh: CatalogAutoRefresh
     var catalogStaleBannerDays: UInt32
