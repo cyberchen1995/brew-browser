@@ -39,7 +39,6 @@
 
 #![deny(clippy::print_stdout, clippy::print_stderr, clippy::dbg_macro)]
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -78,6 +77,16 @@ pub const KEYCHAIN_ACCOUNT_SCOPES: &str = "github_access_token_scopes";
 /// `status()` doesn't have to hit `api.github.com/user` every time
 /// the Settings panel refreshes.
 pub const KEYCHAIN_ACCOUNT_USERNAME: &str = "github_username";
+
+/// Combined credential item — token + username + scopes as ONE JSON blob
+/// under ONE Keychain account. One item = one `SecItemCopyMatching` = ONE
+/// auth prompt, in dev AND prod. The legacy three-account layout above needed
+/// three single-item reads (three prompts under a churning dev identity), and
+/// a `kSecMatchLimitAll` batch silently skips consent-required items instead of
+/// prompting (→ "signed in but status reads empty"). Ported from the native
+/// build's `github_credential_v1` (`GitHubService.swift:168-173`). Reads
+/// migrate the legacy three items into this one on first access.
+pub const KEYCHAIN_ACCOUNT_CREDENTIAL: &str = "github_credential_v1";
 
 /// OAuth Device Flow client identifier.
 ///
@@ -266,23 +275,6 @@ pub trait KeychainSlot: Send + Sync {
 
     /// Delete the entry, treating "no such entry" as success.
     fn delete(&self, account: &str) -> Result<(), BrewError>;
-
-    /// Read several accounts at once, returning only those with a value.
-    ///
-    /// Default: one `read` per account — N separate Keychain accesses, hence N
-    /// auth prompts. macOS [`SystemKeychain`] overrides this with a single
-    /// `SecItemCopyMatching(kSecMatchLimitAll)` so the launch-time sign-in check
-    /// (`status`) costs ONE prompt instead of three. (Mirrors native's
-    /// `keychainReadAll`.) The default keeps tests + non-macOS correct.
-    fn read_many(&self, accounts: &[&str]) -> Result<HashMap<String, String>, BrewError> {
-        let mut out = HashMap::new();
-        for &account in accounts {
-            if let Some(value) = self.read(account)? {
-                out.insert(account.to_string(), value);
-            }
-        }
-        Ok(out)
-    }
 }
 
 /// Production keychain backed by `keyring::Entry` against the macOS
@@ -296,54 +288,6 @@ impl SystemKeychain {
                 message: format!("entry({KEYCHAIN_SERVICE}, {account}): {e}"),
             }
         })
-    }
-
-    /// macOS: read every generic-password item stored under `KEYCHAIN_SERVICE`
-    /// in ONE `SecItemCopyMatching` (`kSecMatchLimitAll`), keyed by account.
-    /// One Keychain access → one auth prompt, vs one prompt per account when
-    /// read individually. `errSecItemNotFound` (nothing stored yet) maps to an
-    /// empty map, not an error. Verbatim intent of native's `keychainReadAll`.
-    #[cfg(target_os = "macos")]
-    fn read_all_batch() -> Result<HashMap<String, String>, BrewError> {
-        use security_framework::item::{ItemClass, ItemSearchOptions, Limit, SearchResult};
-
-        /// `errSecItemNotFound` — no matching items, i.e. signed out.
-        const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
-
-        let results = match ItemSearchOptions::new()
-            .class(ItemClass::generic_password())
-            .service(KEYCHAIN_SERVICE)
-            .load_attributes(true)
-            .load_data(true)
-            .limit(Limit::All)
-            .search()
-        {
-            Ok(items) => items,
-            Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => return Ok(HashMap::new()),
-            Err(e) => {
-                return Err(BrewError::KeychainUnavailable {
-                    message: format!("batch read ({KEYCHAIN_SERVICE}): {e}"),
-                })
-            }
-        };
-
-        // simplify_dict() returns the item's attributes as string pairs; the
-        // account lives under "acct" (kSecAttrAccount) and the secret under
-        // "v_Data" (kSecValueData). Our values (token/scopes JSON/username) are
-        // all UTF-8, so the lossy conversion is lossless here.
-        let mut out = HashMap::new();
-        for result in results {
-            if let SearchResult::Dict(_) = result {
-                if let Some(dict) = result.simplify_dict() {
-                    if let (Some(account), Some(value)) =
-                        (dict.get("acct"), dict.get("v_Data"))
-                    {
-                        out.insert(account.clone(), value.clone());
-                    }
-                }
-            }
-        }
-        Ok(out)
     }
 }
 
@@ -360,6 +304,17 @@ impl KeychainSlot for SystemKeychain {
     }
 
     fn write(&self, account: &str, value: &str) -> Result<(), BrewError> {
+        // Delete-then-add, NOT a plain set_password() in place. macOS
+        // `set_password` does a SecItemUpdate when the item already exists,
+        // which KEEPS the item's existing access-control list. If that item was
+        // created under a different code identity (a prior build, or the
+        // notarized release), updating it leaves the current binary OFF the ACL
+        // — so later reads keep prompting and never "stick". Deleting first
+        // (SecItemDelete needs no secret access, so it doesn't prompt) then
+        // adding fresh makes THIS binary the item's owner. (For a stable signed
+        // build that's a one-time effect; only `tauri dev`'s per-rebuild
+        // identity churn keeps re-triggering it.)
+        let _ = self.delete(account);
         let entry = Self::entry(account)?;
         entry.set_password(value).map_err(|e| {
             BrewError::KeychainUnavailable {
@@ -378,51 +333,76 @@ impl KeychainSlot for SystemKeychain {
             }),
         }
     }
+}
 
-    /// macOS: collapse the per-account reads into one batched Keychain access
-    /// (one auth prompt). `accounts` is ignored — the batch returns every item
-    /// under the service and the caller picks the keys it needs. On non-macOS
-    /// this method is absent, so the trait default (per-account reads) applies.
-    #[cfg(target_os = "macos")]
-    fn read_many(&self, _accounts: &[&str]) -> Result<HashMap<String, String>, BrewError> {
-        Self::read_all_batch()
+// ---------- Combined credential (one item, one prompt) ----------
+
+/// The stored GitHub credential — token + username + scopes — persisted as ONE
+/// Keychain item (`KEYCHAIN_ACCOUNT_CREDENTIAL`) so every read is a single
+/// access = a single auth prompt. Mirrors the native build's combined item.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct StoredCredential {
+    token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+    #[serde(default)]
+    scopes: Vec<String>,
+}
+
+/// Read the combined credential. ONE Keychain access = ONE prompt. If the
+/// combined item is absent but the legacy three-item layout exists, migrate it
+/// into the combined item (one-time) and return it. Returns `None` when signed
+/// out (no token under either layout).
+fn read_credential(keychain: &dyn KeychainSlot) -> Result<Option<StoredCredential>, BrewError> {
+    if let Some(raw) = keychain.read(KEYCHAIN_ACCOUNT_CREDENTIAL)? {
+        if let Ok(cred) = serde_json::from_str::<StoredCredential>(&raw) {
+            if !cred.token.is_empty() {
+                return Ok(Some(cred));
+            }
+        }
+        // Corrupt blob → fall through to the legacy layout / signed-out.
     }
+    // Legacy three-item layout → migrate into the combined item.
+    let token = match keychain.read(KEYCHAIN_ACCOUNT_TOKEN)? {
+        Some(t) if !t.is_empty() => t,
+        _ => return Ok(None),
+    };
+    let username = keychain.read(KEYCHAIN_ACCOUNT_USERNAME)?;
+    let scopes = keychain
+        .read(KEYCHAIN_ACCOUNT_SCOPES)?
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .unwrap_or_default();
+    let cred = StoredCredential { token, username, scopes };
+    // Best-effort migration; a write failure here still returns the creds so
+    // the user stays signed in (a later sign-in re-attempts the write).
+    let _ = write_credential(keychain, &cred);
+    Ok(Some(cred))
+}
+
+/// Persist the combined credential as one JSON Keychain item.
+fn write_credential(keychain: &dyn KeychainSlot, cred: &StoredCredential) -> Result<(), BrewError> {
+    let json = serde_json::to_string(cred).map_err(|e| BrewError::Internal {
+        message: format!("serialize credential: {e}"),
+    })?;
+    keychain.write(KEYCHAIN_ACCOUNT_CREDENTIAL, &json)
 }
 
 // ---------- Status + sign-out (sync) ----------
 
 /// Return the current sign-in status without exposing the token.
-///
-/// Reads the cached `username` + `scopes` blobs from the Keychain
-/// alongside the token. If the token row is missing, returns the
-/// "not signed in" shape.
 pub fn status_with(keychain: &dyn KeychainSlot) -> Result<GithubStatusDto, BrewError> {
-    // ONE batched Keychain read for token + username + scopes (macOS: one auth
-    // prompt; other backends: the trait default does per-account reads).
-    let all = keychain.read_many(&[
-        KEYCHAIN_ACCOUNT_TOKEN,
-        KEYCHAIN_ACCOUNT_USERNAME,
-        KEYCHAIN_ACCOUNT_SCOPES,
-    ])?;
-
-    if !all.contains_key(KEYCHAIN_ACCOUNT_TOKEN) {
-        return Ok(GithubStatusDto {
+    match read_credential(keychain)? {
+        Some(cred) => Ok(GithubStatusDto {
+            signed_in: true,
+            username: cred.username,
+            scopes: cred.scopes,
+        }),
+        None => Ok(GithubStatusDto {
             signed_in: false,
             username: None,
             scopes: Vec::new(),
-        });
+        }),
     }
-
-    let username = all.get(KEYCHAIN_ACCOUNT_USERNAME).cloned();
-    let scopes: Vec<String> = all
-        .get(KEYCHAIN_ACCOUNT_SCOPES)
-        .and_then(|s| serde_json::from_str(s).ok())
-        .unwrap_or_default();
-    Ok(GithubStatusDto {
-        signed_in: true,
-        username,
-        scopes,
-    })
 }
 
 /// Sign-in status against the production keychain.
@@ -435,8 +415,8 @@ pub fn status() -> Result<GithubStatusDto, BrewError> {
 /// Returns the wrapped [`Token`] — never the raw string — so callers
 /// can't accidentally pass it into `format!`.
 pub fn read_token_with(keychain: &dyn KeychainSlot) -> Result<Option<Token>, BrewError> {
-    match keychain.read(KEYCHAIN_ACCOUNT_TOKEN)? {
-        Some(s) => Ok(Some(Token::new(s)?)),
+    match read_credential(keychain)? {
+        Some(cred) => Ok(Some(Token::new(cred.token)?)),
         None => Ok(None),
     }
 }
@@ -446,24 +426,12 @@ pub fn read_token() -> Result<Option<Token>, BrewError> {
     read_token_with(&SystemKeychain)
 }
 
-/// Read the cached scope list (the one we stored at sign-in time).
-///
-/// Returns `Ok(None)` when no scope blob is present in the Keychain —
-/// either because the user isn't signed in or because an older
-/// version's persistence path didn't populate the field. Callers that
-/// need to gate on a specific scope (e.g. `public_repo`) should treat
+/// Read the cached scope list. `Ok(None)` when signed out; `Ok(Some(vec))`
+/// (possibly empty) when signed in. Callers gating on a specific scope treat
 /// `None` and an absent entry in the list the same way: surface
 /// `BrewError::ScopeRequired` with the missing scope.
 pub fn read_scopes_with(keychain: &dyn KeychainSlot) -> Result<Option<Vec<String>>, BrewError> {
-    match keychain.read(KEYCHAIN_ACCOUNT_SCOPES)? {
-        Some(raw) => match serde_json::from_str::<Vec<String>>(&raw) {
-            Ok(v) => Ok(Some(v)),
-            // Corrupt blob → treat as missing. The next successful
-            // sign-in will overwrite it.
-            Err(_) => Ok(None),
-        },
-        None => Ok(None),
-    }
+    Ok(read_credential(keychain)?.map(|c| c.scopes))
 }
 
 /// Read scopes against the production keychain.
@@ -471,9 +439,10 @@ pub fn read_scopes() -> Result<Option<Vec<String>>, BrewError> {
     read_scopes_with(&SystemKeychain)
 }
 
-/// Delete every stored credential. Idempotent — used by the
-/// "Sign out" button in Settings.
+/// Delete every stored credential — the combined item AND any legacy
+/// three-item layout. Idempotent — used by the "Sign out" button in Settings.
 pub fn signout_with(keychain: &dyn KeychainSlot) -> Result<(), BrewError> {
+    keychain.delete(KEYCHAIN_ACCOUNT_CREDENTIAL)?;
     keychain.delete(KEYCHAIN_ACCOUNT_TOKEN)?;
     keychain.delete(KEYCHAIN_ACCOUNT_USERNAME)?;
     keychain.delete(KEYCHAIN_ACCOUNT_SCOPES)?;
@@ -660,15 +629,17 @@ pub async fn poll_device_flow_with(
         // sign-in. Acceptable trade-off; the alternative is failing
         // the whole sign-in over a transient /user 5xx).
         let username = fetch_username(&client, token.as_str()).await.ok();
-        // Persist to Keychain.
-        keychain.write(KEYCHAIN_ACCOUNT_TOKEN, token.as_str())?;
-        if let Some(u) = &username {
-            keychain.write(KEYCHAIN_ACCOUNT_USERNAME, u)?;
-        }
-        let scopes_json = serde_json::to_string(&scopes).map_err(|e| BrewError::Internal {
-            message: format!("serialize scopes: {e}"),
-        })?;
-        keychain.write(KEYCHAIN_ACCOUNT_SCOPES, &scopes_json)?;
+        // Persist as ONE combined Keychain item (token + username + scopes) so
+        // every later read is a single access = a single prompt (matches the
+        // native build's `github_credential_v1`).
+        write_credential(
+            keychain,
+            &StoredCredential {
+                token: token.as_str().to_string(),
+                username: username.clone(),
+                scopes: scopes.clone(),
+            },
+        )?;
         return Ok(PollResult::Approved { username, scopes });
     }
 
@@ -981,21 +952,59 @@ mod tests {
     /// must collapse to `None` so the gate prompts a re-grant instead
     /// of failing on a parse error.
     #[test]
-    fn read_scopes_round_trips_json_array() {
+    fn read_scopes_round_trips_via_legacy_migration() {
         let kc = MockKeychain::new();
-        // No entry → None.
+        // Signed out → None.
         assert!(read_scopes_with(&kc).expect("no entry").is_none());
 
-        // Valid JSON → Some(scopes).
+        // Legacy layout (token + scopes) is migrated into the combined item
+        // on read, and the scopes come back. Scopes now live inside the
+        // credential, so a token must be present for them to be readable.
+        kc.write(KEYCHAIN_ACCOUNT_TOKEN, "ghp_x").unwrap();
         kc.write(KEYCHAIN_ACCOUNT_SCOPES, r#"["read:user","public_repo"]"#).unwrap();
-        let scopes = read_scopes_with(&kc).expect("read").expect("Some");
+        let scopes = read_scopes_with(&kc).expect("read").expect("Some (signed in)");
         assert_eq!(scopes, vec!["read:user", "public_repo"]);
+    }
 
-        // Corrupt blob → None (defensive — never errors so the gate
-        // can run "is `public_repo` present?" without a try/catch
-        // sprinkled across every command).
+    #[test]
+    fn read_scopes_corrupt_blob_collapses_to_empty_not_error() {
+        // A corrupt scope blob must not error — the gate runs "is
+        // `public_repo` present?" over an empty list and fails closed
+        // (→ ScopeRequired / re-grant) rather than throwing.
+        let kc = MockKeychain::new();
+        kc.write(KEYCHAIN_ACCOUNT_TOKEN, "ghp_x").unwrap();
         kc.write(KEYCHAIN_ACCOUNT_SCOPES, "not json").unwrap();
-        assert!(read_scopes_with(&kc).expect("corrupt").is_none());
+        let scopes = read_scopes_with(&kc).expect("must not error").expect("signed in");
+        assert!(scopes.is_empty(), "corrupt scopes collapse to empty");
+    }
+
+    /// The combined credential is read in one shot, and a legacy three-item
+    /// layout is migrated into it on first read (matches native's behavior;
+    /// existing signed-in users aren't logged out by the layout change).
+    #[test]
+    fn combined_credential_read_and_legacy_migration() {
+        // Direct combined item.
+        let kc = MockKeychain::new();
+        kc.write(
+            KEYCHAIN_ACCOUNT_CREDENTIAL,
+            r#"{"token":"ghp_combined","username":"octocat","scopes":["public_repo"]}"#,
+        )
+        .unwrap();
+        let s = status_with(&kc).expect("status");
+        assert!(s.signed_in);
+        assert_eq!(s.username.as_deref(), Some("octocat"));
+        assert_eq!(s.scopes, vec!["public_repo"]);
+
+        // Legacy three-item layout → migrated into the combined item on read.
+        let kc2 = MockKeychain::new();
+        kc2.write(KEYCHAIN_ACCOUNT_TOKEN, "ghp_legacy").unwrap();
+        kc2.write(KEYCHAIN_ACCOUNT_USERNAME, "hubot").unwrap();
+        kc2.write(KEYCHAIN_ACCOUNT_SCOPES, r#"["read:user"]"#).unwrap();
+        assert!(status_with(&kc2).expect("status").signed_in);
+        assert!(
+            kc2.read(KEYCHAIN_ACCOUNT_CREDENTIAL).unwrap().is_some(),
+            "legacy layout should be migrated into the combined item"
+        );
     }
 
     // ---------- Failure paths ----------
