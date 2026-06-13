@@ -39,9 +39,7 @@ pub struct CategoriesData {
 }
 
 #[tauri::command]
-pub async fn categories_data(
-    state: State<'_, AppState>,
-) -> Result<Arc<CategoriesData>, BrewError> {
+pub async fn categories_data(state: State<'_, AppState>) -> Result<Arc<CategoriesData>, BrewError> {
     {
         let cached = state.categories_cache.lock().await;
         if let Some(data) = cached.as_ref() {
@@ -49,11 +47,10 @@ pub async fn categories_data(
         }
     }
 
-    let parsed: CategoriesData = serde_json::from_str(CATEGORIES_JSON).map_err(|e| {
-        BrewError::Internal {
+    let parsed: CategoriesData =
+        serde_json::from_str(CATEGORIES_JSON).map_err(|e| BrewError::Internal {
             message: format!("categories.json parse failed: {e}"),
-        }
-    })?;
+        })?;
     let arc = Arc::new(parsed);
 
     let mut cached = state.categories_cache.lock().await;
@@ -67,9 +64,12 @@ mod tests {
 
     #[test]
     fn embedded_json_parses() {
-        let parsed: CategoriesData = serde_json::from_str(CATEGORIES_JSON)
-            .expect("bundled categories.json must parse");
-        assert!(parsed.categories.len() >= 15, "expected at least 15 category slugs");
+        let parsed: CategoriesData =
+            serde_json::from_str(CATEGORIES_JSON).expect("bundled categories.json must parse");
+        assert!(
+            parsed.categories.len() >= 15,
+            "expected at least 15 category slugs"
+        );
         assert!(parsed.casks.len() > 1000, "expected >1k casks");
         assert!(parsed.formulae.len() > 1000, "expected >1k formulae");
         // every item's category slug must be present in the categories map

@@ -67,9 +67,7 @@ impl TrendingHistoryCache {
 
     pub fn put_series(&mut self, key: HistoryKey, series: TrendingHistorySeries) {
         // Eviction: if at cap, drop the oldest entry by `fetched_at`.
-        if self.series.len() >= TRENDING_HISTORY_MAX_PACKAGES
-            && !self.series.contains_key(&key)
-        {
+        if self.series.len() >= TRENDING_HISTORY_MAX_PACKAGES && !self.series.contains_key(&key) {
             if let Some(oldest_key) = self
                 .series
                 .iter()

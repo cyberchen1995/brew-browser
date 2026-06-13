@@ -43,12 +43,7 @@ pub async fn brew_search(
         if cfg!(not(target_os = "macos")) {
             return Ok(String::new());
         }
-        run_brew_capture(
-            &path2,
-            &["search", "--cask", &q2],
-            "brew search --cask",
-        )
-        .await
+        run_brew_capture(&path2, &["search", "--cask", &q2], "brew search --cask").await
     });
 
     let (f_res, c_res) = tokio::join!(f_task, c_task);
@@ -122,12 +117,7 @@ pub async fn brew_search_desc(
     validate_search_query(&query)?;
     let path = state.require_brew_path().await?;
 
-    let raw = run_brew_capture(
-        &path,
-        &["search", "--desc", &query],
-        "brew search --desc",
-    )
-    .await?;
+    let raw = run_brew_capture(&path, &["search", "--desc", &query], "brew search --desc").await?;
 
     let installed_set = build_installed_set(&state).await;
 
@@ -168,9 +158,11 @@ pub async fn brew_search_desc(
 /// to treat this as an empty result on that side, not as a typed error.
 fn is_brew_search_no_match(e: &BrewError) -> bool {
     match e {
-        BrewError::BrewExitNonZero { exit_code, stderr_excerpt, .. } if *exit_code == 1 => {
-            stderr_excerpt.contains("No formulae or casks found")
-        }
+        BrewError::BrewExitNonZero {
+            exit_code,
+            stderr_excerpt,
+            ..
+        } if *exit_code == 1 => stderr_excerpt.contains("No formulae or casks found"),
         _ => false,
     }
 }
@@ -265,8 +257,10 @@ pub async fn local_search(
 
     // Build a token → Vec<category_label> map once so per-row scoring is
     // a cheap lookup instead of an O(categories) scan per token.
-    let mut formula_labels: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
-    let mut cask_labels: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+    let mut formula_labels: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
+    let mut cask_labels: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
     if let Some(cat) = categories.as_deref() {
         for (token, slugs) in cat.formulae.iter() {
             let labels: Vec<&str> = slugs
@@ -293,81 +287,81 @@ pub async fn local_search(
     // Description is the best free-text we found for the row (AI summary
     // preferred over upstream desc) so the frontend can show it without
     // a second IPC round-trip.
-    let score_pkg = |name: &str,
-                     desc: Option<&str>,
-                     labels: &[&str]|
-     -> Option<(u32, Option<String>)> {
-        // AI summary + friendly name from enrichment, if available.
-        let entry = enrichment.as_deref().and_then(|e| e.entries.get(name));
-        let friendly = entry.and_then(|e| e.friendly_name.as_deref());
-        let summary = entry.and_then(|e| e.summary.as_deref());
-        let tags: Vec<&str> = entry
-            .map(|e| e.tags.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_default();
+    let score_pkg =
+        |name: &str, desc: Option<&str>, labels: &[&str]| -> Option<(u32, Option<String>)> {
+            // AI summary + friendly name from enrichment, if available.
+            let entry = enrichment.as_deref().and_then(|e| e.entries.get(name));
+            let friendly = entry.and_then(|e| e.friendly_name.as_deref());
+            let summary = entry.and_then(|e| e.summary.as_deref());
+            let tags: Vec<&str> = entry
+                .map(|e| e.tags.iter().map(|s| s.as_str()).collect())
+                .unwrap_or_default();
 
-        let name_lc = name.to_ascii_lowercase();
-        let desc_lc = desc.map(|s| s.to_ascii_lowercase());
-        let friendly_lc = friendly.map(|s| s.to_ascii_lowercase());
-        let summary_lc = summary.map(|s| s.to_ascii_lowercase());
-        let labels_lc: Vec<String> = labels.iter().map(|s| s.to_ascii_lowercase()).collect();
-        let tags_lc: Vec<String> = tags.iter().map(|s| s.to_ascii_lowercase()).collect();
+            let name_lc = name.to_ascii_lowercase();
+            let desc_lc = desc.map(|s| s.to_ascii_lowercase());
+            let friendly_lc = friendly.map(|s| s.to_ascii_lowercase());
+            let summary_lc = summary.map(|s| s.to_ascii_lowercase());
+            let labels_lc: Vec<String> = labels.iter().map(|s| s.to_ascii_lowercase()).collect();
+            let tags_lc: Vec<String> = tags.iter().map(|s| s.to_ascii_lowercase()).collect();
 
-        let mut total: u32 = 0;
-        for term in &terms {
-            let mut best: u32 = 0;
-            // Name match — exact > starts-with > substring.
-            if name_lc == *term {
-                best = best.max(weight::NAME_EXACT);
-            } else if name_lc.starts_with(term) {
-                best = best.max(weight::NAME_STARTS_WITH);
-            } else if name_lc.contains(term) {
-                best = best.max(weight::NAME_SUBSTRING);
-            }
-            // friendly name substring.
-            if let Some(fl) = &friendly_lc {
-                if fl.contains(term) {
-                    best = best.max(weight::FRIENDLY_NAME);
+            let mut total: u32 = 0;
+            for term in &terms {
+                let mut best: u32 = 0;
+                // Name match — exact > starts-with > substring.
+                if name_lc == *term {
+                    best = best.max(weight::NAME_EXACT);
+                } else if name_lc.starts_with(term) {
+                    best = best.max(weight::NAME_STARTS_WITH);
+                } else if name_lc.contains(term) {
+                    best = best.max(weight::NAME_SUBSTRING);
                 }
-            }
-            // category labels — substring on any label.
-            for label in &labels_lc {
-                if label.contains(term) {
-                    best = best.max(weight::CATEGORY_LABEL);
-                    break;
+                // friendly name substring.
+                if let Some(fl) = &friendly_lc {
+                    if fl.contains(term) {
+                        best = best.max(weight::FRIENDLY_NAME);
+                    }
                 }
-            }
-            // summary substring.
-            if let Some(sl) = &summary_lc {
-                if sl.contains(term) {
-                    best = best.max(weight::SUMMARY);
+                // category labels — substring on any label.
+                for label in &labels_lc {
+                    if label.contains(term) {
+                        best = best.max(weight::CATEGORY_LABEL);
+                        break;
+                    }
                 }
-            }
-            // desc substring.
-            if let Some(dl) = &desc_lc {
-                if dl.contains(term) {
-                    best = best.max(weight::DESC);
+                // summary substring.
+                if let Some(sl) = &summary_lc {
+                    if sl.contains(term) {
+                        best = best.max(weight::SUMMARY);
+                    }
                 }
-            }
-            // tag substring.
-            for tag in &tags_lc {
-                if tag.contains(term) {
-                    best = best.max(weight::TAG);
-                    break;
+                // desc substring.
+                if let Some(dl) = &desc_lc {
+                    if dl.contains(term) {
+                        best = best.max(weight::DESC);
+                    }
                 }
+                // tag substring.
+                for tag in &tags_lc {
+                    if tag.contains(term) {
+                        best = best.max(weight::TAG);
+                        break;
+                    }
+                }
+
+                if best == 0 {
+                    // This term didn't match anywhere — AND semantics means the
+                    // whole package is rejected.
+                    return None;
+                }
+                total = total.saturating_add(best);
             }
 
-            if best == 0 {
-                // This term didn't match anywhere — AND semantics means the
-                // whole package is rejected.
-                return None;
-            }
-            total = total.saturating_add(best);
-        }
-
-        // Description to show in the row: AI summary preferred over upstream desc.
-        let display_desc = summary.map(|s| s.to_string()).or_else(|| desc.map(|s| s.to_string()));
-        Some((total, display_desc))
-    };
+            // Description to show in the row: AI summary preferred over upstream desc.
+            let display_desc = summary
+                .map(|s| s.to_string())
+                .or_else(|| desc.map(|s| s.to_string()));
+            Some((total, display_desc))
+        };
 
     // Score every formula + cask.
     let mut formula_hits: Vec<(u32, SearchHit)> = Vec::new();
@@ -421,10 +415,19 @@ pub async fn local_search(
     let extra = (f_cap - f_take) + (c_cap - c_take);
     // Spill any unused half capacity into the other side.
     let f_final = f_take + extra.min(formula_hits.len().saturating_sub(f_take));
-    let c_final = c_take + (LOCAL_SEARCH_TOP_N - f_final).min(cask_hits.len().saturating_sub(c_take));
+    let c_final =
+        c_take + (LOCAL_SEARCH_TOP_N - f_final).min(cask_hits.len().saturating_sub(c_take));
 
-    let formulae: Vec<SearchHit> = formula_hits.into_iter().take(f_final).map(|(_, h)| h).collect();
-    let casks: Vec<SearchHit> = cask_hits.into_iter().take(c_final).map(|(_, h)| h).collect();
+    let formulae: Vec<SearchHit> = formula_hits
+        .into_iter()
+        .take(f_final)
+        .map(|(_, h)| h)
+        .collect();
+    let casks: Vec<SearchHit> = cask_hits
+        .into_iter()
+        .take(c_final)
+        .map(|(_, h)| h)
+        .collect();
 
     Ok(SearchResults {
         query,

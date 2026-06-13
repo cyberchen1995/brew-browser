@@ -77,8 +77,7 @@ const HTML_MAX_BYTES: usize = 64 * 1024;
 
 /// User-Agent. Identifies the app and gives ops at the receiving end a
 /// contact to file abuse reports against if we ever misbehave.
-const USER_AGENT: &str =
-    "brew-browser/0.1 (+https://github.com/msitarzewski/brew-browser)";
+const USER_AGENT: &str = "brew-browser/0.1 (+https://github.com/msitarzewski/brew-browser)";
 
 /// Global concurrency cap for outbound homepage probes (L4).
 ///
@@ -317,9 +316,7 @@ fn parse_http_url(url: &str) -> Option<ParsedUrl> {
         return None;
     }
     // `authority` ends at the first `/`, `?`, or `#`.
-    let end = rest
-        .find(['/', '?', '#'])
-        .unwrap_or(rest.len());
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let authority = &rest[..end];
     if authority.is_empty() {
         return None;
@@ -528,8 +525,7 @@ fn looks_like_image_content_type(value: &str) -> bool {
 /// Base URL for App Fair's `appcasks` icon repository — the source Applite and
 /// App Fair use. Each cask's icon is a release asset tagged `cask-<token>` with
 /// filename `AppIcon.png`. Org is `App-Fair` (capital, hyphen), verified live.
-const APPCASKS_BASE: &str =
-    "https://github.com/App-Fair/appcasks/releases/download";
+const APPCASKS_BASE: &str = "https://github.com/App-Fair/appcasks/releases/download";
 
 async fn probe_appcasks(client: &reqwest::Client, token: &str) -> Option<Vec<u8>> {
     // token is already `validate_cask_token`-checked by the caller, so it's safe
@@ -594,13 +590,17 @@ pub(crate) fn extract_og_image(html: &str) -> Option<String> {
     let mut i = 0;
     while let Some(rel) = find_subsequence(&lower_bytes[i..], b"<meta") {
         let start = i + rel + 5; // position right after `<meta`
-        // Boundary check: next char must be whitespace or '>' so we don't
-        // match `<metadata` (unlikely but cheap to guard).
+                                 // Boundary check: next char must be whitespace or '>' so we don't
+                                 // match `<metadata` (unlikely but cheap to guard).
         if start >= bytes.len() {
             break;
         }
         let next = bytes[start];
-        if !(next == b' ' || next == b'\t' || next == b'\n' || next == b'\r' || next == b'>'
+        if !(next == b' '
+            || next == b'\t'
+            || next == b'\n'
+            || next == b'\r'
+            || next == b'>'
             || next == b'/')
         {
             i = start;
@@ -692,9 +692,7 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
     }
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 // ---------- Probe: favicon ----------
@@ -834,9 +832,11 @@ async fn write_and_normalize(bytes: &[u8], cache_path: &Path) -> Result<(), Brew
     staged.push(".staging");
     let staged = PathBuf::from(staged);
 
-    tokio::fs::write(&staged, bytes).await.map_err(|e| BrewError::Io {
-        message: format!("write staging {}: {}", staged.display(), e),
-    })?;
+    tokio::fs::write(&staged, bytes)
+        .await
+        .map_err(|e| BrewError::Io {
+            message: format!("write staging {}: {}", staged.display(), e),
+        })?;
 
     let result = sips_convert_to_png(&staged, cache_path).await;
     // Clean up the staging file regardless of sips success.
@@ -950,8 +950,8 @@ mod tests {
             "HTTP://example.com",
             "Http://example.com",
         ] {
-            let p = parse_http_url(url)
-                .unwrap_or_else(|| panic!("must parse case-variant {:?}", url));
+            let p =
+                parse_http_url(url).unwrap_or_else(|| panic!("must parse case-variant {:?}", url));
             assert_eq!(p.host, "example.com");
         }
     }
@@ -1094,8 +1094,7 @@ mod tests {
 
     #[test]
     fn extract_og_image_tolerates_single_quotes() {
-        let html =
-            r#"<meta property='og:image' content='https://example.com/icon.png'>"#;
+        let html = r#"<meta property='og:image' content='https://example.com/icon.png'>"#;
         assert_eq!(
             extract_og_image(html).as_deref(),
             Some("https://example.com/icon.png")
@@ -1104,8 +1103,7 @@ mod tests {
 
     #[test]
     fn extract_og_image_tolerates_reversed_attribute_order() {
-        let html =
-            r#"<meta content="https://example.com/x.png" property="og:image">"#;
+        let html = r#"<meta content="https://example.com/x.png" property="og:image">"#;
         assert_eq!(
             extract_og_image(html).as_deref(),
             Some("https://example.com/x.png")
@@ -1124,8 +1122,7 @@ mod tests {
 
     #[test]
     fn extract_og_image_returns_none_when_absent() {
-        let html =
-            r#"<html><head><meta property="og:title" content="X"></head></html>"#;
+        let html = r#"<html><head><meta property="og:title" content="X"></head></html>"#;
         assert_eq!(extract_og_image(html), None);
     }
 
@@ -1164,16 +1161,14 @@ mod tests {
     #[test]
     fn extract_og_image_does_not_match_metadata_substring() {
         // Word-boundary check on `<meta` — don't false-match `<metadata`.
-        let html =
-            r#"<metadata property="og:image" content="https://x/y.png"></metadata>"#;
+        let html = r#"<metadata property="og:image" content="https://x/y.png"></metadata>"#;
         assert_eq!(extract_og_image(html), None);
     }
 
     #[test]
     fn extract_og_image_skips_data_content_attribute() {
         // `data-content=` is a different attribute; must not be read as `content=`.
-        let html =
-            r#"<meta property="og:image" data-content="https://wrong/" content="https://right/x.png">"#;
+        let html = r#"<meta property="og:image" data-content="https://wrong/" content="https://right/x.png">"#;
         assert_eq!(
             extract_og_image(html).as_deref(),
             Some("https://right/x.png")

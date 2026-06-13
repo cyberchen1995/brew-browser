@@ -535,10 +535,7 @@ async fn fetch_advisory_with(
     if (bytes.len() as u64) > MAX_RESPONSE_BYTES {
         return Err(BrewError::Network {
             url,
-            message: format!(
-                "body length {} exceeds {MAX_RESPONSE_BYTES}",
-                bytes.len()
-            ),
+            message: format!("body length {} exceeds {MAX_RESPONSE_BYTES}", bytes.len()),
         });
     }
 
@@ -615,14 +612,14 @@ mod tests {
         let bad = [
             "",
             "GHSA-",
-            "GHSA-abc-1234-wxyz",  // group too short
-            "GHSA-abcd-1234",       // missing group
-            "ghsa-abcd-1234-wxyz",  // wrong case prefix
+            "GHSA-abc-1234-wxyz",        // group too short
+            "GHSA-abcd-1234",            // missing group
+            "ghsa-abcd-1234-wxyz",       // wrong case prefix
             "GHSA-abcd-1234-wxyz-extra", // too many groups
-            "GHSA-ab/d-1234-wxyz",  // slash → would break URL pathing
-            "GHSA-ab.d-1234-wxyz",  // dot
+            "GHSA-ab/d-1234-wxyz",       // slash → would break URL pathing
+            "GHSA-ab.d-1234-wxyz",       // dot
             "CVE-2024-1",
-            "GHSA-abcd-1234-wxy",   // group too short by 1
+            "GHSA-abcd-1234-wxy", // group too short by 1
             "../etc/passwd",
         ];
         for id in bad {
@@ -645,11 +642,7 @@ mod tests {
         let original = vulns.clone();
         enrich(&state, &mut vulns).await.expect("ok");
         assert_eq!(vulns, original, "github_enabled=false must be a no-op");
-        assert_eq!(
-            fetch_attempts(),
-            0,
-            "no HTTP attempt should have been made"
-        );
+        assert_eq!(fetch_attempts(), 0, "no HTTP attempt should have been made");
     }
 
     #[tokio::test]
@@ -678,10 +671,7 @@ mod tests {
             ..Settings::default()
         };
         let (state, _tmp) = state_with_tempdir(SettingsLoadState::Loaded(s)).await;
-        let mut vulns = vec![
-            ghsa_vuln("CVE-2024-1"),
-            ghsa_vuln("CVE-2024-99999"),
-        ];
+        let mut vulns = vec![ghsa_vuln("CVE-2024-1"), ghsa_vuln("CVE-2024-99999")];
         let original = vulns.clone();
         enrich(&state, &mut vulns).await.expect("ok");
         assert_eq!(vulns, original, "CVE entries must be untouched");
@@ -745,7 +735,9 @@ mod tests {
             fetch_count: 99,
         };
         let bytes = serde_json::to_vec(&future).unwrap();
-        tokio::fs::write(cache_path(tmp.path()), bytes).await.unwrap();
+        tokio::fs::write(cache_path(tmp.path()), bytes)
+            .await
+            .unwrap();
         let c = GhsaCache::load(tmp.path()).await;
         // Forward-compat: future schema → drop, start fresh.
         assert!(c.file.entries.is_empty());

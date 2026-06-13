@@ -22,18 +22,10 @@ pub async fn brew_info(
             "--formula",
             format!("brew info --json=v2 --formula {}", name),
         ),
-        PackageKind::Cask => (
-            "--cask",
-            format!("brew info --json=v2 --cask {}", name),
-        ),
+        PackageKind::Cask => ("--cask", format!("brew info --json=v2 --cask {}", name)),
     };
 
-    let raw = run_brew_capture(
-        &path,
-        &["info", "--json=v2", kind_flag, &name],
-        &display,
-    )
-    .await?;
+    let raw = run_brew_capture(&path, &["info", "--json=v2", kind_flag, &name], &display).await?;
 
     let parsed: RawInfoV2 = serde_json::from_str(&raw).map_err(|e| BrewError::JsonParse {
         command: display.clone(),
@@ -42,29 +34,32 @@ pub async fn brew_info(
     })?;
 
     // Capture the raw JSON for the "raw" tab in the detail panel.
-    let raw_value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
-        BrewError::JsonParse {
+    let raw_value: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| BrewError::JsonParse {
             command: display.clone(),
             message: e.to_string(),
             raw_excerpt: truncate_head(&raw, 2048),
-        }
-    })?;
+        })?;
 
     let mut detail = match kind {
         PackageKind::Formula => {
-            let f = parsed.formulae.into_iter().next().ok_or_else(|| {
-                BrewError::Internal {
+            let f = parsed
+                .formulae
+                .into_iter()
+                .next()
+                .ok_or_else(|| BrewError::Internal {
                     message: format!("brew returned no formula entry for {}", name),
-                }
-            })?;
+                })?;
             f.to_detail(raw_value)
         }
         PackageKind::Cask => {
-            let c = parsed.casks.into_iter().next().ok_or_else(|| {
-                BrewError::Internal {
+            let c = parsed
+                .casks
+                .into_iter()
+                .next()
+                .ok_or_else(|| BrewError::Internal {
                     message: format!("brew returned no cask entry for {}", name),
-                }
-            })?;
+                })?;
             c.to_detail(raw_value)
         }
     };
@@ -273,12 +268,7 @@ mod tests {
 
     #[test]
     fn rejects_leading_dash_injection() {
-        for s in &[
-            "-rm",
-            "--force",
-            "-version",
-            "-",
-        ] {
+        for s in &["-rm", "--force", "-version", "-"] {
             let msg = err_message(validate_package_name(s));
             assert!(
                 msg.contains("may not start with '-'"),
@@ -301,7 +291,7 @@ mod tests {
             "foo|bar",
             "$(whoami)",
             "`whoami`",
-            "foo bar",   // space
+            "foo bar", // space
             "foo>out",
             "foo<in",
             "foo*",
@@ -328,10 +318,10 @@ mod tests {
         // potential downstream concern — `brew` itself would reject them.
         // The empty-segment, control-char forms ARE rejected:
         for s in &[
-            "../etc/passwd\0",   // null byte
-            "foo\nbar",          // newline
-            "foo\rbar",          // CR
-            "foo\tbar",          // tab
+            "../etc/passwd\0", // null byte
+            "foo\nbar",        // newline
+            "foo\rbar",        // CR
+            "foo\tbar",        // tab
         ] {
             let r = validate_package_name(s);
             assert!(

@@ -19,8 +19,7 @@ const HOST_INSTALL: &str = "https://formulae.brew.sh/api/analytics/install";
 /// in parallel with the primary `install` endpoint and merged into the
 /// same `TrendingEntry` so the frontend can choose which signal to
 /// display. Dramatically de-noises the leaderboard.
-const HOST_INSTALL_ON_REQUEST: &str =
-    "https://formulae.brew.sh/api/analytics/install-on-request";
+const HOST_INSTALL_ON_REQUEST: &str = "https://formulae.brew.sh/api/analytics/install-on-request";
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_ENTRIES: usize = 100;
@@ -340,8 +339,8 @@ mod tests {
         // expected — and the legacy fallback path is exercised by
         // `raw_analytics_parses_documented_legacy_shape` below.
         let raw = load_fixture("trending_30d.json");
-        let parsed: RawAnalytics = serde_json::from_str(&raw)
-            .expect("RawAnalytics parses real payload");
+        let parsed: RawAnalytics =
+            serde_json::from_str(&raw).expect("RawAnalytics parses real payload");
         assert_eq!(parsed.total_count, 25_713_624);
         assert!(
             parsed.formulae.is_empty(),
@@ -467,11 +466,7 @@ mod tests {
     fn merge_re_ranks_after_sort() {
         // Input order doesn't matter; final ranks must reflect
         // descending install_count.
-        let install = vec![
-            raw("c", "10", 1),
-            raw("a", "100", 2),
-            raw("b", "50", 3),
-        ];
+        let install = vec![raw("c", "10", 1), raw("a", "100", 2), raw("b", "50", 3)];
         let ior = HashMap::new();
         let installed = HashSet::new();
 

@@ -31,11 +31,7 @@ pub async fn brew_install(
         PackageKind::Formula => "--formula",
         PackageKind::Cask => "--cask",
     };
-    let mut args = vec![
-        "install".to_string(),
-        kind_flag.to_string(),
-        name.clone(),
-    ];
+    let mut args = vec!["install".to_string(), kind_flag.to_string(), name.clone()];
     if force {
         args.push("--force".to_string());
     }
@@ -72,11 +68,7 @@ pub async fn brew_uninstall(
         PackageKind::Formula => "--formula",
         PackageKind::Cask => "--cask",
     };
-    let mut args = vec![
-        "uninstall".to_string(),
-        kind_flag.to_string(),
-        name.clone(),
-    ];
+    let mut args = vec!["uninstall".to_string(), kind_flag.to_string(), name.clone()];
     if zap && matches!(kind, PackageKind::Cask) {
         args.push("--zap".to_string());
     }

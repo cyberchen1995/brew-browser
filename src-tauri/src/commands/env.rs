@@ -189,9 +189,18 @@ mod tests {
         assert_eq!(v["brewFound"], true);
         assert_eq!(v["brewPath"], "/opt/homebrew/bin/brew");
         assert_eq!(v["cltFound"], false);
-        assert!(v.get("brew_found").is_none(), "must not emit snake_case `brew_found`");
-        assert!(v.get("brew_path").is_none(), "must not emit snake_case `brew_path`");
-        assert!(v.get("clt_found").is_none(), "must not emit snake_case `clt_found`");
+        assert!(
+            v.get("brew_found").is_none(),
+            "must not emit snake_case `brew_found`"
+        );
+        assert!(
+            v.get("brew_path").is_none(),
+            "must not emit snake_case `brew_path`"
+        );
+        assert!(
+            v.get("clt_found").is_none(),
+            "must not emit snake_case `clt_found`"
+        );
     }
 
     #[test]
@@ -230,7 +239,13 @@ mod tests {
             .contains("https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"));
         assert!(TERMINAL_INSTALL_SCRIPT.starts_with("tell application \"Terminal\""));
         assert!(TERMINAL_INSTALL_SCRIPT.ends_with("end tell"));
-        assert!(!TERMINAL_INSTALL_SCRIPT.contains("{}"), "no format placeholders allowed");
-        assert!(!TERMINAL_INSTALL_SCRIPT.contains("{0}"), "no format placeholders allowed");
+        assert!(
+            !TERMINAL_INSTALL_SCRIPT.contains("{}"),
+            "no format placeholders allowed"
+        );
+        assert!(
+            !TERMINAL_INSTALL_SCRIPT.contains("{0}"),
+            "no format placeholders allowed"
+        );
     }
 }

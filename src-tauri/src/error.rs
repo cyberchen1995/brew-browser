@@ -286,7 +286,10 @@ mod tests {
         // Critical: must be camelCase for frontend's BrewErrorPayload type.
         assert_eq!(v["exitCode"], 1);
         assert_eq!(v["stderrExcerpt"], "boom");
-        assert!(v.get("exit_code").is_none(), "must not emit snake_case `exit_code`");
+        assert!(
+            v.get("exit_code").is_none(),
+            "must not emit snake_case `exit_code`"
+        );
         assert!(
             v.get("stderr_excerpt").is_none(),
             "must not emit snake_case `stderr_excerpt`"
@@ -331,7 +334,9 @@ mod tests {
 
     #[test]
     fn io_serializes_with_message() {
-        let err = BrewError::Io { message: "ENOENT".into() };
+        let err = BrewError::Io {
+            message: "ENOENT".into(),
+        };
         let v: Value = serde_json::to_value(&err).unwrap();
         assert_eq!(v["code"], "io");
         assert_eq!(v["message"], "ENOENT");
@@ -379,7 +384,10 @@ mod tests {
         let v: Value = serde_json::to_value(&err).unwrap();
         assert_eq!(v["code"], "job_not_found");
         assert_eq!(v["jobId"], "00000000-0000-0000-0000-000000000000");
-        assert!(v.get("job_id").is_none(), "must not emit snake_case `job_id`");
+        assert!(
+            v.get("job_id").is_none(),
+            "must not emit snake_case `job_id`"
+        );
     }
 
     #[test]
@@ -526,7 +534,11 @@ mod tests {
     fn truncate_tail_truncates_with_ellipsis_prefix() {
         let s = "abcdefghij";
         let out = truncate_tail(s, 4);
-        assert!(out.starts_with('…'), "expected ellipsis prefix, got {:?}", out);
+        assert!(
+            out.starts_with('…'),
+            "expected ellipsis prefix, got {:?}",
+            out
+        );
         assert!(out.ends_with("ghij"));
     }
 
@@ -539,7 +551,11 @@ mod tests {
     fn truncate_head_truncates_with_ellipsis_suffix() {
         let s = "abcdefghij";
         let out = truncate_head(s, 4);
-        assert!(out.ends_with('…'), "expected ellipsis suffix, got {:?}", out);
+        assert!(
+            out.ends_with('…'),
+            "expected ellipsis suffix, got {:?}",
+            out
+        );
         assert!(out.starts_with("abcd"));
     }
 

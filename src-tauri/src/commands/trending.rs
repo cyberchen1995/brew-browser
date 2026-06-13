@@ -112,22 +112,14 @@ pub async fn trending_fetch(
 /// v0.4.0 — fan out fetches for every window not currently fresh in
 /// cache. Soft-fails per-window so a transient 5xx on one doesn't
 /// poison the others. Updates the cache with whatever succeeded.
-async fn ensure_all_windows_cached(
-    state: &AppState,
-    installed: &HashSet<String>,
-    ttl: Duration,
-) {
+async fn ensure_all_windows_cached(state: &AppState, installed: &HashSet<String>, ttl: Duration) {
     // Quick scan under the lock — identify stale/missing windows.
     let stale: Vec<TrendingWindow> = {
         let cache = state.trending_cache.lock().await;
         ALL_WINDOWS
             .iter()
             .copied()
-            .filter(|w| {
-                cache
-                    .get(*w)
-                    .is_none_or(|c| c.fetched_at.elapsed() >= ttl)
-            })
+            .filter(|w| cache.get(*w).is_none_or(|c| c.fetched_at.elapsed() >= ttl))
             .collect()
     };
     if stale.is_empty() {
@@ -427,6 +419,9 @@ mod tests {
         // Sanity: under the historical 60-minute TTL, the same entry
         // would have been considered fresh — confirms the setting is
         // what's changing the decision.
-        assert!(age < TRENDING_TTL, "10 min < 60 min default → would have been fresh");
+        assert!(
+            age < TRENDING_TTL,
+            "10 min < 60 min default → would have been fresh"
+        );
     }
 }

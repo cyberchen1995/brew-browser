@@ -125,13 +125,15 @@ impl<'de> Deserialize<'de> for Severity {
         // use other casings — case-fold once at the boundary so the rest
         // of the codebase never has to think about it.
         let raw: Option<String> = Option::deserialize(d)?;
-        Ok(match raw.as_deref().map(str::to_ascii_lowercase).as_deref() {
-            Some("critical") => Severity::Critical,
-            Some("high") => Severity::High,
-            Some("medium") | Some("moderate") => Severity::Medium,
-            Some("low") => Severity::Low,
-            _ => Severity::Unknown,
-        })
+        Ok(
+            match raw.as_deref().map(str::to_ascii_lowercase).as_deref() {
+                Some("critical") => Severity::Critical,
+                Some("high") => Severity::High,
+                Some("medium") | Some("moderate") => Severity::Medium,
+                Some("low") => Severity::Low,
+                _ => Severity::Unknown,
+            },
+        )
     }
 }
 
@@ -312,12 +314,7 @@ pub async fn scan_one(brew: &Path, formula: &str) -> Result<Vec<RawVuln>, BrewEr
     validate_formula_name(formula)?;
     let display = format!("brew vulns --json --formula {formula}");
     // Tolerant wrapper — same exit-1-is-findings semantics as scan_all.
-    let raw = run_vulns_capture(
-        brew,
-        &["vulns", "--json", "--formula", formula],
-        &display,
-    )
-    .await?;
+    let raw = run_vulns_capture(brew, &["vulns", "--json", "--formula", formula], &display).await?;
     let results = parse_scan_output(&raw, &display)?;
     // brew vulns IGNORES --formula and returns the WHOLE install set, so keep
     // only the requested formula's record — otherwise the detail card shows
@@ -581,20 +578,14 @@ mod tests {
             "git-lfs",
             "lib_foo",
         ] {
-            assert!(
-                validate_formula_name(name).is_ok(),
-                "should accept: {name}"
-            );
+            assert!(validate_formula_name(name).is_ok(), "should accept: {name}");
         }
     }
 
     #[test]
     fn validate_formula_name_rejects_shell_meta() {
         for bad in ["curl; rm -rf /", "curl|nc", "curl`whoami`", "curl $(id)"] {
-            assert!(
-                validate_formula_name(bad).is_err(),
-                "should reject: {bad}"
-            );
+            assert!(validate_formula_name(bad).is_err(), "should reject: {bad}");
         }
     }
 

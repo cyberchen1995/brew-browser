@@ -160,7 +160,11 @@ pub struct ReverseDependents {
 /// inverted index: at ~8.4k formulae it is sub-millisecond, and an
 /// on-demand pass avoids any `AppState` mutation or memoization
 /// bookkeeping.
-fn invert_dependents(catalog: &Catalog, target: &str, include_casks: bool) -> Vec<ReverseDependent> {
+fn invert_dependents(
+    catalog: &Catalog,
+    target: &str,
+    include_casks: bool,
+) -> Vec<ReverseDependent> {
     use std::collections::HashMap;
 
     // Keyed by (name, kind) so a formula and a (hypothetical) cask of
@@ -185,23 +189,43 @@ fn invert_dependents(catalog: &Catalog, target: &str, include_casks: bool) -> Ve
 
     for f in catalog.formulae.values() {
         if f.dependencies.iter().any(|d| d == target) {
-            consider(&f.name, ReverseDependentKind::Formula, ReverseDependentEdge::Required);
+            consider(
+                &f.name,
+                ReverseDependentKind::Formula,
+                ReverseDependentEdge::Required,
+            );
         }
         if f.build_dependencies.iter().any(|d| d == target) {
-            consider(&f.name, ReverseDependentKind::Formula, ReverseDependentEdge::Build);
+            consider(
+                &f.name,
+                ReverseDependentKind::Formula,
+                ReverseDependentEdge::Build,
+            );
         }
         if f.recommended_dependencies.iter().any(|d| d == target) {
-            consider(&f.name, ReverseDependentKind::Formula, ReverseDependentEdge::Recommended);
+            consider(
+                &f.name,
+                ReverseDependentKind::Formula,
+                ReverseDependentEdge::Recommended,
+            );
         }
         if f.optional_dependencies.iter().any(|d| d == target) {
-            consider(&f.name, ReverseDependentKind::Formula, ReverseDependentEdge::Optional);
+            consider(
+                &f.name,
+                ReverseDependentKind::Formula,
+                ReverseDependentEdge::Optional,
+            );
         }
     }
 
     if include_casks {
         for c in catalog.casks.values() {
             if c.depends_on_formula.iter().any(|d| d == target) {
-                consider(&c.token, ReverseDependentKind::Cask, ReverseDependentEdge::Required);
+                consider(
+                    &c.token,
+                    ReverseDependentKind::Cask,
+                    ReverseDependentEdge::Required,
+                );
             }
         }
     }
@@ -531,15 +555,11 @@ pub async fn maybe_auto_refresh_catalog(state: &AppState) {
 
     // 3. Apply the schedule.
     if !should_auto_refresh(schedule, age) {
-        tracing::debug!(
-            "catalog auto-refresh: not due yet (schedule={schedule:?}, age={age:?})"
-        );
+        tracing::debug!("catalog auto-refresh: not due yet (schedule={schedule:?}, age={age:?})");
         return;
     }
 
-    tracing::info!(
-        "catalog auto-refresh: scheduling refresh (schedule={schedule:?}, age={age:?})"
-    );
+    tracing::info!("catalog auto-refresh: scheduling refresh (schedule={schedule:?}, age={age:?})");
 
     // 4. Run the refresh. Errors are non-fatal — log and move on. The
     // user keeps the stale catalog and can hit the Dashboard refresh
@@ -581,10 +601,7 @@ async fn fetch_capped(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, Br
         if bytes.len() as u64 + chunk.len() as u64 > MAX_CATALOG_BYTES {
             return Err(BrewError::Network {
                 url: url.to_string(),
-                message: format!(
-                    "response exceeded {} byte cap",
-                    MAX_CATALOG_BYTES
-                ),
+                message: format!("response exceeded {} byte cap", MAX_CATALOG_BYTES),
             });
         }
         bytes.extend_from_slice(&chunk);
@@ -594,8 +611,10 @@ async fn fetch_capped(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, Br
 
 fn gzip_compress(bytes: &[u8]) -> Result<Vec<u8>, BrewError> {
     use std::io::Write;
-    let mut encoder =
-        flate2::write::GzEncoder::new(Vec::with_capacity(bytes.len() / 4), flate2::Compression::best());
+    let mut encoder = flate2::write::GzEncoder::new(
+        Vec::with_capacity(bytes.len() / 4),
+        flate2::Compression::best(),
+    );
     encoder.write_all(bytes).map_err(|e| BrewError::Io {
         message: format!("gzip write: {e}"),
     })?;
@@ -608,12 +627,11 @@ fn gzip_compress(bytes: &[u8]) -> Result<Vec<u8>, BrewError> {
 /// re-deserializing the records into typed structs. Used pre-write to
 /// (a) catch totally non-JSON responses and (b) seed `Manifest.*_count`.
 fn count_top_level_array(bytes: &[u8], url: &str) -> Result<usize, BrewError> {
-    let v: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|e| BrewError::JsonParse {
-            command: url.to_string(),
-            message: e.to_string(),
-            raw_excerpt: String::new(),
-        })?;
+    let v: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| BrewError::JsonParse {
+        command: url.to_string(),
+        message: e.to_string(),
+        raw_excerpt: String::new(),
+    })?;
     let arr = v.as_array().ok_or_else(|| BrewError::JsonParse {
         command: url.to_string(),
         message: "expected top-level JSON array".into(),
@@ -739,7 +757,10 @@ mod tests {
     #[tokio::test]
     async fn lookup_unknown_returns_none() {
         let cat = Catalog::load_bundled().expect("load bundled");
-        let f = cat.formulae.get("this-is-not-a-real-formula-xyzzy").cloned();
+        let f = cat
+            .formulae
+            .get("this-is-not-a-real-formula-xyzzy")
+            .cloned();
         assert!(f.is_none());
     }
 
@@ -875,7 +896,9 @@ mod tests {
         let deps = invert_dependents(&cat, "openssl@3", true);
         let names: Vec<&str> = deps.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, vec!["curl", "wget"]);
-        assert!(deps.iter().all(|d| d.edge == ReverseDependentEdge::Required));
+        assert!(deps
+            .iter()
+            .all(|d| d.edge == ReverseDependentEdge::Required));
         assert!(deps.iter().all(|d| d.kind == ReverseDependentKind::Formula));
     }
 
@@ -961,7 +984,10 @@ mod tests {
         let cat = fixture_catalog(vec![fixture_formula("libfido2")], vec![aptible]);
 
         let deps = invert_dependents(&cat, "libfido2", false);
-        assert!(deps.is_empty(), "cask edge must be omitted when include_casks=false");
+        assert!(
+            deps.is_empty(),
+            "cask edge must be omitted when include_casks=false"
+        );
     }
 
     #[test]
@@ -992,7 +1018,10 @@ mod tests {
         );
         // Sorted ascending — verify the invariant holds on real data.
         for w in deps.windows(2) {
-            assert!(w[0].name <= w[1].name, "reverse-dependents must be sorted by name");
+            assert!(
+                w[0].name <= w[1].name,
+                "reverse-dependents must be sorted by name"
+            );
         }
 
         let leaf = invert_dependents(&cat, "this-is-not-a-real-formula-xyzzy", true);

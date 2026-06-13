@@ -31,12 +31,7 @@ pub async fn brew_list(
 
     let path = state.require_brew_path().await?;
     let display = "brew info --installed --json=v2";
-    let raw = run_brew_capture(
-        &path,
-        &["info", "--installed", "--json=v2"],
-        display,
-    )
-    .await?;
+    let raw = run_brew_capture(&path, &["info", "--installed", "--json=v2"], display).await?;
 
     let parsed: RawInfoV2 = serde_json::from_str(&raw).map_err(|e| BrewError::JsonParse {
         command: display.to_string(),
@@ -65,12 +60,7 @@ pub async fn brew_list(
 pub async fn brew_outdated(state: State<'_, AppState>) -> Result<Vec<OutdatedPackage>, BrewError> {
     let path = state.require_brew_path().await?;
     let display = "brew outdated --json=v2 --greedy";
-    let raw = run_brew_capture(
-        &path,
-        &["outdated", "--json=v2", "--greedy"],
-        display,
-    )
-    .await?;
+    let raw = run_brew_capture(&path, &["outdated", "--json=v2", "--greedy"], display).await?;
 
     let parsed: RawOutdatedV2 = serde_json::from_str(&raw).map_err(|e| BrewError::JsonParse {
         command: display.to_string(),
@@ -79,7 +69,12 @@ pub async fn brew_outdated(state: State<'_, AppState>) -> Result<Vec<OutdatedPac
     })?;
 
     let mut out = Vec::with_capacity(parsed.formulae.len() + parsed.casks.len());
-    out.extend(parsed.formulae.iter().map(|e| e.to_dto(PackageKind::Formula)));
+    out.extend(
+        parsed
+            .formulae
+            .iter()
+            .map(|e| e.to_dto(PackageKind::Formula)),
+    );
     out.extend(parsed.casks.iter().map(|e| e.to_dto(PackageKind::Cask)));
 
     Ok(out)

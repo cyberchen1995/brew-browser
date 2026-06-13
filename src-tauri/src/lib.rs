@@ -58,8 +58,9 @@ pub fn run() {
     // Best-effort tracing setup — silent if RUST_LOG is unset.
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,brew_browser_lib=info")),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("warn,brew_browser_lib=info")
+            }),
         )
         .try_init();
 
@@ -112,7 +113,9 @@ pub fn run() {
                 // sidebar and main panes; the WebView background must be set
                 // transparent in CSS (see app.css :root) for the blur to show.
                 use tauri::Manager;
-                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+                use window_vibrancy::{
+                    apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+                };
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = apply_vibrancy(
                         &window,
@@ -282,10 +285,7 @@ fn build_app_menu<R: tauri::Runtime>(
         .build()
 }
 
-fn handle_menu_event<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    event: tauri::menu::MenuEvent,
-) {
+fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri::menu::MenuEvent) {
     use tauri::Emitter;
     match event.id().as_ref() {
         MENU_EVENT_ABOUT => {

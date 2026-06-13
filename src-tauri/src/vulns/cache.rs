@@ -552,7 +552,9 @@ mod tests {
             ..Default::default()
         };
         let bytes = serde_json::to_vec(&future).unwrap();
-        tokio::fs::write(cache_path(tmp.path()), bytes).await.unwrap();
+        tokio::fs::write(cache_path(tmp.path()), bytes)
+            .await
+            .unwrap();
         let c = VulnsCache::load(tmp.path()).await;
         // Forward-compat: a v0.5.1 cache file must not crash v0.5.0.
         // Drop it and start fresh — same outcome as the corrupt case.

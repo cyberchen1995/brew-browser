@@ -14,8 +14,8 @@ use crate::brew::exec::run_brew_streaming;
 use crate::error::BrewError;
 use crate::state::AppState;
 use crate::types::{
-    Brewfile, BrewfileCask, BrewfileCheckReport, BrewfileCounts, BrewfileEntries, BrewfileFormula,
-    BrewfileId, BrewfileMasApp, BrewfileSummary, BrewStreamEvent, JobResult,
+    BrewStreamEvent, Brewfile, BrewfileCask, BrewfileCheckReport, BrewfileCounts, BrewfileEntries,
+    BrewfileFormula, BrewfileId, BrewfileMasApp, BrewfileSummary, JobResult,
 };
 
 #[tauri::command]
@@ -125,9 +125,7 @@ pub async fn brewfile_check(
 }
 
 #[tauri::command]
-pub async fn brewfile_list(
-    state: State<'_, AppState>,
-) -> Result<Vec<BrewfileSummary>, BrewError> {
+pub async fn brewfile_list(state: State<'_, AppState>) -> Result<Vec<BrewfileSummary>, BrewError> {
     let dir = state.brewfiles_dir.clone();
     if !dir.exists() {
         return Ok(Vec::new());
@@ -184,10 +182,7 @@ pub async fn brewfile_read(
 }
 
 #[tauri::command]
-pub async fn brewfile_delete(
-    id: BrewfileId,
-    state: State<'_, AppState>,
-) -> Result<(), BrewError> {
+pub async fn brewfile_delete(id: BrewfileId, state: State<'_, AppState>) -> Result<(), BrewError> {
     let target = brewfile_path(&state.brewfiles_dir, &id)?;
     if !target.is_file() {
         return Err(BrewError::BrewfileNotFound { id });
@@ -226,9 +221,11 @@ pub async fn brewfile_export(
     // Sandbox check — refuse to write inside system locations or our own
     // app data dir. See `is_safe_export_target` for the full rationale.
     is_safe_export_target(&dst, &state.app_data_dir)?;
-    tokio::fs::copy(&src, &dst).await.map_err(|e| BrewError::Io {
-        message: format!("copy to {}: {}", dst.display(), e),
-    })?;
+    tokio::fs::copy(&src, &dst)
+        .await
+        .map_err(|e| BrewError::Io {
+            message: format!("copy to {}: {}", dst.display(), e),
+        })?;
     Ok(())
 }
 
@@ -254,9 +251,11 @@ pub async fn brewfile_import(
         });
     }
     let dst = brewfile_path(&state.brewfiles_dir, &id)?;
-    tokio::fs::copy(&src, &dst).await.map_err(|e| BrewError::Io {
-        message: format!("copy from {}: {}", source_path, e),
-    })?;
+    tokio::fs::copy(&src, &dst)
+        .await
+        .map_err(|e| BrewError::Io {
+            message: format!("copy from {}: {}", source_path, e),
+        })?;
     summary_for(&dst, &id, &label)
 }
 
@@ -431,10 +430,7 @@ fn is_safe_import_source(src: &Path) -> Result<(), BrewError> {
     let ft = meta.file_type();
     if ft.is_symlink() {
         return Err(BrewError::InvalidArgument {
-            message: format!(
-                "refusing to import Brewfile via symlink: {}",
-                src.display()
-            ),
+            message: format!("refusing to import Brewfile via symlink: {}", src.display()),
         });
     }
     if !ft.is_file() {
@@ -711,7 +707,11 @@ fn extract_mas_id(s: &str) -> Option<u64> {
     // Looking for `id: 123456`.
     let idx = s.find("id:")?;
     let after = &s[idx + 3..];
-    let digits: String = after.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = after
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     digits.parse::<u64>().ok()
 }
 
@@ -805,7 +805,9 @@ mod tests {
         assert_eq!(e.mas_apps[1].id, 904280696);
 
         assert_eq!(e.vscode_extensions.len(), 2);
-        assert!(e.vscode_extensions.contains(&"ms-python.python".to_string()));
+        assert!(e
+            .vscode_extensions
+            .contains(&"ms-python.python".to_string()));
     }
 
     #[test]
@@ -947,8 +949,17 @@ Vscode extension ms-python.python needs to be installed.
     fn brewfile_id_accepts_sanitize_label_output() {
         // Every id sanitize_label can produce must survive validation,
         // otherwise we'd reject snapshots we created ourselves.
-        for ok in &["my-snap", "pre_upgrade", "v1_2_3", "A1", "snapshot_2025-01-01_120000"] {
-            assert!(validate_brewfile_id(ok).is_ok(), "{ok:?} should be accepted");
+        for ok in &[
+            "my-snap",
+            "pre_upgrade",
+            "v1_2_3",
+            "A1",
+            "snapshot_2025-01-01_120000",
+        ] {
+            assert!(
+                validate_brewfile_id(ok).is_ok(),
+                "{ok:?} should be accepted"
+            );
             assert!(brewfile_path(Path::new("/tmp/bb"), ok).is_ok());
         }
     }
@@ -965,19 +976,25 @@ Vscode extension ms-python.python needs to be installed.
             "..",
             "foo/bar",
             "foo/../../bar",
-            "a.b",            // '.' is not in the allowlist
+            "a.b", // '.' is not in the allowlist
             "with space",
             "semi;colon",
             "nul\0byte",
-            "",               // empty
-            &"x".repeat(65),  // over length cap
+            "",              // empty
+            &"x".repeat(65), // over length cap
         ] {
             assert!(
-                matches!(validate_brewfile_id(evil), Err(BrewError::InvalidArgument { .. })),
+                matches!(
+                    validate_brewfile_id(evil),
+                    Err(BrewError::InvalidArgument { .. })
+                ),
                 "{evil:?} should be rejected by validate_brewfile_id"
             );
             assert!(
-                matches!(brewfile_path(dir, evil), Err(BrewError::InvalidArgument { .. })),
+                matches!(
+                    brewfile_path(dir, evil),
+                    Err(BrewError::InvalidArgument { .. })
+                ),
                 "brewfile_path must refuse to build a path for {evil:?}"
             );
         }
@@ -1030,10 +1047,7 @@ Vscode extension ms-python.python needs to be installed.
     #[test]
     fn export_rejects_private_etc_and_private_var() {
         let app = PathBuf::from("/Users/x/Library/Application Support/brew-browser");
-        for path in &[
-            "/private/etc/passwd",
-            "/private/var/db/something",
-        ] {
+        for path in &["/private/etc/passwd", "/private/var/db/something"] {
             let r = is_safe_export_target(Path::new(path), &app);
             assert!(
                 matches!(r, Err(BrewError::InvalidArgument { .. })),

@@ -82,11 +82,8 @@ pub(crate) async fn du_bytes(path: &Path) -> (u64, bool, Option<String>) {
     if !path.exists() {
         return (0, false, None);
     }
-    let output = tokio::time::timeout(
-        DU_TIMEOUT,
-        Command::new("du").arg("-sk").arg(path).output(),
-    )
-    .await;
+    let output =
+        tokio::time::timeout(DU_TIMEOUT, Command::new("du").arg("-sk").arg(path).output()).await;
     let result = match output {
         Ok(Ok(o)) => o,
         Ok(Err(e)) => return (0, true, Some(format!("du spawn failed: {e}"))),
@@ -97,7 +94,11 @@ pub(crate) async fn du_bytes(path: &Path) -> (u64, bool, Option<String>) {
         return (
             0,
             true,
-            Some(if stderr.is_empty() { "du failed".into() } else { stderr }),
+            Some(if stderr.is_empty() {
+                "du failed".into()
+            } else {
+                stderr
+            }),
         );
     }
     let text = String::from_utf8_lossy(&result.stdout);
@@ -259,8 +260,12 @@ pub async fn open_in_finder(path: String, state: State<'_, AppState>) -> Result<
     // on a pure-formula install); we still refuse it for safety.
     let target = PathBuf::from(&path);
     let target_canon = target.canonicalize().unwrap_or_else(|_| target.clone());
-    let prefix_canon = PathBuf::from(&prefix).canonicalize().unwrap_or_else(|_| PathBuf::from(&prefix));
-    let cache_canon = PathBuf::from(&cache).canonicalize().unwrap_or_else(|_| PathBuf::from(&cache));
+    let prefix_canon = PathBuf::from(&prefix)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(&prefix));
+    let cache_canon = PathBuf::from(&cache)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(&cache));
 
     let inside = target_canon.starts_with(&prefix_canon) || target_canon.starts_with(&cache_canon);
     if !inside {

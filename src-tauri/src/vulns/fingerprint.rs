@@ -146,7 +146,8 @@ mod tests {
         let fp = compute(&[formula("curl", "8.4.0")]);
         assert_eq!(fp.len(), 64, "SHA-256 hex length");
         assert!(
-            fp.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            fp.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             "must be lowercase hex"
         );
     }

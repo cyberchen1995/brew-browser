@@ -356,11 +356,10 @@ impl Catalog {
     /// ourselves (defense in depth — keeps the helper honest if someone
     /// later swaps the bundled bytes for a third-party feed).
     pub fn load_bundled() -> Result<Catalog, BrewError> {
-        let manifest: Manifest = serde_json::from_str(BUNDLED_MANIFEST).map_err(|e| {
-            BrewError::Internal {
+        let manifest: Manifest =
+            serde_json::from_str(BUNDLED_MANIFEST).map_err(|e| BrewError::Internal {
                 message: format!("bundled manifest parse failed: {e}"),
-            }
-        })?;
+            })?;
 
         let formulae_bytes = decompress_capped(BUNDLED_FORMULA_GZ, "bundled formula.json.gz")?;
         let casks_bytes = decompress_capped(BUNDLED_CASK_GZ, "bundled cask.json.gz")?;
@@ -404,13 +403,12 @@ impl Catalog {
         // Read all three with size caps. Anything bigger than the cap
         // is treated as corruption (Err), not silent truncation.
         let manifest_bytes = read_capped(&manifest_path, 1024 * 1024).await?;
-        let manifest: Manifest = serde_json::from_slice(&manifest_bytes).map_err(|e| {
-            BrewError::JsonParse {
+        let manifest: Manifest =
+            serde_json::from_slice(&manifest_bytes).map_err(|e| BrewError::JsonParse {
                 command: "load_user_data manifest.json".into(),
                 message: e.to_string(),
                 raw_excerpt: String::new(),
-            }
-        })?;
+            })?;
 
         let formula_gz = read_capped(&formula_path, MAX_CATALOG_BYTES).await?;
         let cask_gz = read_capped(&cask_path, MAX_CATALOG_BYTES).await?;
@@ -487,9 +485,11 @@ impl Catalog {
     ) -> Result<(), BrewError> {
         let dir = catalog_dir(app_data_dir);
         if !dir.exists() {
-            tokio::fs::create_dir_all(&dir).await.map_err(|e| BrewError::Io {
-                message: format!("create catalog dir {}: {}", dir.display(), e),
-            })?;
+            tokio::fs::create_dir_all(&dir)
+                .await
+                .map_err(|e| BrewError::Io {
+                    message: format!("create catalog dir {}: {}", dir.display(), e),
+                })?;
         }
         atomic_write(&dir.join("formula.json.gz"), formulae_bytes).await?;
         atomic_write(&dir.join("cask.json.gz"), casks_bytes).await?;
@@ -630,8 +630,7 @@ mod tests {
 
     #[test]
     fn manifest_parses() {
-        let m: Manifest =
-            serde_json::from_str(BUNDLED_MANIFEST).expect("bundled manifest parses");
+        let m: Manifest = serde_json::from_str(BUNDLED_MANIFEST).expect("bundled manifest parses");
         assert!(!m.as_of.is_empty());
         assert!(m.formula_count > 1000);
         assert!(m.cask_count > 1000);
@@ -698,7 +697,9 @@ mod tests {
         truncate_in_place(&mut s, 5);
         // Must not panic; result is valid utf-8.
         assert!(s.len() <= 5);
-        assert!(s.chars().all(|c| c.is_ascii() || c == '日' || c == '本' || c == '語'));
+        assert!(s
+            .chars()
+            .all(|c| c.is_ascii() || c == '日' || c == '本' || c == '語'));
     }
 
     #[test]
@@ -807,9 +808,11 @@ mod tests {
         // catalog naturally has hundreds, so any single one will do as
         // long as we don't pin to a specific name (those churn).
         let cat = Catalog::load_bundled().expect("load bundled");
-        let dep = cat.formulae.values().find(|f| f.deprecated).expect(
-            "bundled catalog should contain at least one deprecated formula",
-        );
+        let dep = cat
+            .formulae
+            .values()
+            .find(|f| f.deprecated)
+            .expect("bundled catalog should contain at least one deprecated formula");
         assert!(dep.deprecated);
         // Most deprecated formulae carry a reason — but it's not required,
         // so just check the flag plumbed through.
@@ -845,7 +848,10 @@ mod tests {
         let c: Cask = serde_json::from_str(raw).expect("parse cask");
         assert!(c.deprecated);
         assert_eq!(c.deprecation_date.as_deref(), Some("2024-01"));
-        assert_eq!(c.deprecation_reason.as_deref(), Some("no longer maintained"));
+        assert_eq!(
+            c.deprecation_reason.as_deref(),
+            Some("no longer maintained")
+        );
         assert!(c.disabled);
         assert_eq!(c.disable_date.as_deref(), Some("2025-06"));
         assert_eq!(c.disable_reason.as_deref(), Some("removed upstream"));

@@ -245,7 +245,9 @@ impl RawFormula {
     pub fn to_package(&self) -> Package {
         let installed_first = self.installed.first();
         let installed_version = installed_first.map(|i| i.version.clone());
-        let installed_on_request = installed_first.map(|i| i.installed_on_request).unwrap_or(false);
+        let installed_on_request = installed_first
+            .map(|i| i.installed_on_request)
+            .unwrap_or(false);
         let installed_as_dependency = installed_first
             .map(|i| i.installed_as_dependency)
             .unwrap_or(false);
@@ -375,14 +377,15 @@ impl RawCask {
         // GitHub-resolvable URL as a canonical homepage. See
         // `Package::github_homepage`. Casks with GitHub-Releases
         // artifacts but marketing-page homepages are common.
-        let github_homepage = crate::github::resolve_github_homepage([
-            self.homepage.as_deref(),
-            self.url.as_deref(),
-        ]);
+        let github_homepage =
+            crate::github::resolve_github_homepage([self.homepage.as_deref(), self.url.as_deref()]);
 
         Package {
             name: self.token.clone(),
-            full_name: self.full_token.clone().unwrap_or_else(|| self.token.clone()),
+            full_name: self
+                .full_token
+                .clone()
+                .unwrap_or_else(|| self.token.clone()),
             kind: PackageKind::Cask,
             installed_version: self.installed.clone(),
             stable_version: self.version.clone(),
@@ -610,7 +613,11 @@ fn check_app_is_mas_macos(filename: &str) -> bool {
         candidates.push(home.join("Applications").join(filename));
     }
     candidates.into_iter().any(|p| {
-        p.is_dir() && p.join("Contents").join("_MASReceipt").join("receipt").exists()
+        p.is_dir()
+            && p.join("Contents")
+                .join("_MASReceipt")
+                .join("receipt")
+                .exists()
     })
 }
 
@@ -658,10 +665,17 @@ mod tests {
     #[test]
     fn raw_formula_parses_brew_info_wget_fixture() {
         let raw = load_fixture("brew_info_wget.json");
-        let parsed: RawInfoV2 = serde_json::from_str(&raw)
-            .expect("brew info wget fixture must parse into RawInfoV2");
-        assert_eq!(parsed.formulae.len(), 1, "wget fixture should yield one formula");
-        assert!(parsed.casks.is_empty(), "wget fixture casks should be empty");
+        let parsed: RawInfoV2 =
+            serde_json::from_str(&raw).expect("brew info wget fixture must parse into RawInfoV2");
+        assert_eq!(
+            parsed.formulae.len(),
+            1,
+            "wget fixture should yield one formula"
+        );
+        assert!(
+            parsed.casks.is_empty(),
+            "wget fixture casks should be empty"
+        );
 
         let pkg = parsed.formulae[0].to_package();
         assert_eq!(pkg.name, "wget");
@@ -715,7 +729,10 @@ mod tests {
         let pkg = parsed.formulae[0].to_package();
         assert_eq!(pkg.kind, PackageKind::Formula);
         assert!(!pkg.name.is_empty(), "name should not be empty");
-        assert!(!pkg.full_name.is_empty(), "full_name should fall back to name");
+        assert!(
+            !pkg.full_name.is_empty(),
+            "full_name should fall back to name"
+        );
     }
 
     /// Phase 13b/12g — `github_homepage` resolution.
@@ -828,8 +845,15 @@ mod tests {
         let raw = load_fixture("brew_info_firefox.json");
         let parsed: RawInfoV2 = serde_json::from_str(&raw)
             .expect("brew info firefox fixture must parse into RawInfoV2");
-        assert!(parsed.formulae.is_empty(), "firefox fixture formulae should be empty");
-        assert_eq!(parsed.casks.len(), 1, "firefox fixture should yield one cask");
+        assert!(
+            parsed.formulae.is_empty(),
+            "firefox fixture formulae should be empty"
+        );
+        assert_eq!(
+            parsed.casks.len(),
+            1,
+            "firefox fixture should yield one cask"
+        );
 
         let pkg = parsed.casks[0].to_package();
         assert_eq!(pkg.name, "firefox");
@@ -837,7 +861,10 @@ mod tests {
         assert_eq!(pkg.kind, PackageKind::Cask);
         assert_eq!(pkg.description.as_deref(), Some("Web browser"));
         assert_eq!(pkg.tap.as_deref(), Some("homebrew/cask"));
-        assert!(pkg.stable_version.is_some(), "cask should have a stable_version");
+        assert!(
+            pkg.stable_version.is_some(),
+            "cask should have a stable_version"
+        );
         // Cask info from formulae.brew.sh has no license field — we tolerate it.
         assert_eq!(pkg.license, None);
     }
@@ -1004,7 +1031,10 @@ mod tests {
         let raw = load_fixture("brew_outdated.json");
         let parsed: RawOutdatedV2 =
             serde_json::from_str(&raw).expect("brew_outdated fixture must parse");
-        assert!(!parsed.formulae.is_empty(), "should have at least one outdated formula");
+        assert!(
+            !parsed.formulae.is_empty(),
+            "should have at least one outdated formula"
+        );
 
         let first = &parsed.formulae[0];
         let dto = first.to_dto(PackageKind::Formula);
@@ -1086,10 +1116,7 @@ mod tests {
 
     use crate::types::IconSource;
 
-    fn cask_with(
-        installed: Option<&str>,
-        homepage: Option<&str>,
-    ) -> RawCask {
+    fn cask_with(installed: Option<&str>, homepage: Option<&str>) -> RawCask {
         RawCask {
             token: "demo".into(),
             full_token: None,
@@ -1251,17 +1278,32 @@ mod tests {
             artifacts: None,
         };
         let detail = raw.to_detail(serde_json::Value::Null);
-        assert!(!detail.exists_in_applications, "bogus cask must not resolve to an app bundle");
-        assert!(!detail.is_mas, "bogus cask must not be flagged as a Mac App Store app");
+        assert!(
+            !detail.exists_in_applications,
+            "bogus cask must not resolve to an app bundle"
+        );
+        assert!(
+            !detail.is_mas,
+            "bogus cask must not be flagged as a Mac App Store app"
+        );
     }
 
     #[test]
     fn check_app_exists_rejects_unsafe_or_missing_names() {
         // Path-traversal, separators, and non-.app inputs are rejected before
         // any filesystem access — deterministic on every platform.
-        assert!(!check_app_exists_macos("../Evil.app"), "path traversal must be rejected");
-        assert!(!check_app_exists_macos("sub/dir/App.app"), "separators must be rejected");
-        assert!(!check_app_exists_macos("NotAnApp"), "missing .app suffix must be rejected");
+        assert!(
+            !check_app_exists_macos("../Evil.app"),
+            "path traversal must be rejected"
+        );
+        assert!(
+            !check_app_exists_macos("sub/dir/App.app"),
+            "separators must be rejected"
+        );
+        assert!(
+            !check_app_exists_macos("NotAnApp"),
+            "missing .app suffix must be rejected"
+        );
         assert!(!check_app_exists_macos(""), "empty name must be rejected");
         // Well-formed but guaranteed-absent bundle name → no false hit.
         assert!(!check_app_exists_macos("ZzBrewBrowserNonexistent12345.app"));
@@ -1283,7 +1325,10 @@ mod tests {
         let out = cask_app_filenames(&Some(artifacts));
         assert!(out.contains(&"Plain.app".to_string()));
         assert!(out.contains(&"Renamed.app".to_string()));
-        assert!(out.contains(&"FromSource.app".to_string()), "source path must reduce to its basename");
+        assert!(
+            out.contains(&"FromSource.app".to_string()),
+            "source path must reduce to its basename"
+        );
         assert_eq!(out.len(), 3, "non-app stanzas must be ignored");
     }
 }

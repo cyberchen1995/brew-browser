@@ -97,7 +97,10 @@ mod tests {
     #[test]
     fn put_then_get_returns_inserted_entry() {
         let mut c = TrendingCache::default();
-        c.put(TrendingWindow::D30, make_entry(TrendingWindow::D30, Duration::from_secs(0)));
+        c.put(
+            TrendingWindow::D30,
+            make_entry(TrendingWindow::D30, Duration::from_secs(0)),
+        );
         assert!(c.get(TrendingWindow::D30).is_some());
         // Other windows untouched.
         assert!(c.get(TrendingWindow::D90).is_none());
@@ -107,20 +110,44 @@ mod tests {
     #[test]
     fn per_window_isolation() {
         let mut c = TrendingCache::default();
-        c.put(TrendingWindow::D30, make_entry(TrendingWindow::D30, Duration::ZERO));
-        c.put(TrendingWindow::D90, make_entry(TrendingWindow::D90, Duration::ZERO));
-        c.put(TrendingWindow::D365, make_entry(TrendingWindow::D365, Duration::ZERO));
+        c.put(
+            TrendingWindow::D30,
+            make_entry(TrendingWindow::D30, Duration::ZERO),
+        );
+        c.put(
+            TrendingWindow::D90,
+            make_entry(TrendingWindow::D90, Duration::ZERO),
+        );
+        c.put(
+            TrendingWindow::D365,
+            make_entry(TrendingWindow::D365, Duration::ZERO),
+        );
 
-        assert_eq!(c.get(TrendingWindow::D30).unwrap().report.window, TrendingWindow::D30);
-        assert_eq!(c.get(TrendingWindow::D90).unwrap().report.window, TrendingWindow::D90);
-        assert_eq!(c.get(TrendingWindow::D365).unwrap().report.window, TrendingWindow::D365);
+        assert_eq!(
+            c.get(TrendingWindow::D30).unwrap().report.window,
+            TrendingWindow::D30
+        );
+        assert_eq!(
+            c.get(TrendingWindow::D90).unwrap().report.window,
+            TrendingWindow::D90
+        );
+        assert_eq!(
+            c.get(TrendingWindow::D365).unwrap().report.window,
+            TrendingWindow::D365
+        );
     }
 
     #[test]
     fn is_fresh_true_for_recently_inserted() {
         let mut c = TrendingCache::default();
-        c.put(TrendingWindow::D30, make_entry(TrendingWindow::D30, Duration::from_secs(60)));
-        assert!(c.is_fresh(TrendingWindow::D30), "1-min-old entry should be fresh");
+        c.put(
+            TrendingWindow::D30,
+            make_entry(TrendingWindow::D30, Duration::from_secs(60)),
+        );
+        assert!(
+            c.is_fresh(TrendingWindow::D30),
+            "1-min-old entry should be fresh"
+        );
     }
 
     #[test]
@@ -131,7 +158,10 @@ mod tests {
             TrendingWindow::D30,
             make_entry(TrendingWindow::D30, Duration::from_secs(2 * 60 * 60)),
         );
-        assert!(!c.is_fresh(TrendingWindow::D30), "2h-old entry should be stale");
+        assert!(
+            !c.is_fresh(TrendingWindow::D30),
+            "2h-old entry should be stale"
+        );
     }
 
     #[test]
@@ -151,7 +181,9 @@ mod tests {
             TrendingWindow::D30,
             make_entry(TrendingWindow::D30, Duration::from_secs(3 * 60 * 60)),
         );
-        let entry = c.get(TrendingWindow::D30).expect("stale entry must remain in cache");
+        let entry = c
+            .get(TrendingWindow::D30)
+            .expect("stale entry must remain in cache");
         assert!(
             entry.fetched_at.elapsed() > TRENDING_TTL,
             "entry must in fact be past TTL for this test to be meaningful"
@@ -161,9 +193,18 @@ mod tests {
     #[test]
     fn clear_evicts_all_windows() {
         let mut c = TrendingCache::default();
-        c.put(TrendingWindow::D30, make_entry(TrendingWindow::D30, Duration::ZERO));
-        c.put(TrendingWindow::D90, make_entry(TrendingWindow::D90, Duration::ZERO));
-        c.put(TrendingWindow::D365, make_entry(TrendingWindow::D365, Duration::ZERO));
+        c.put(
+            TrendingWindow::D30,
+            make_entry(TrendingWindow::D30, Duration::ZERO),
+        );
+        c.put(
+            TrendingWindow::D90,
+            make_entry(TrendingWindow::D90, Duration::ZERO),
+        );
+        c.put(
+            TrendingWindow::D365,
+            make_entry(TrendingWindow::D365, Duration::ZERO),
+        );
 
         c.clear();
         assert!(c.get(TrendingWindow::D30).is_none());
@@ -174,10 +215,16 @@ mod tests {
     #[test]
     fn put_replaces_existing_entry() {
         let mut c = TrendingCache::default();
-        c.put(TrendingWindow::D30, make_entry(TrendingWindow::D30, Duration::from_secs(100)));
+        c.put(
+            TrendingWindow::D30,
+            make_entry(TrendingWindow::D30, Duration::from_secs(100)),
+        );
         let old_time = c.get(TrendingWindow::D30).unwrap().fetched_at;
         // Sleep is not required because Instant is monotonic per-process; new value differs.
-        c.put(TrendingWindow::D30, make_entry(TrendingWindow::D30, Duration::ZERO));
+        c.put(
+            TrendingWindow::D30,
+            make_entry(TrendingWindow::D30, Duration::ZERO),
+        );
         let new_time = c.get(TrendingWindow::D30).unwrap().fetched_at;
         assert!(new_time > old_time, "put must replace the previous entry");
     }

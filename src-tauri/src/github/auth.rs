@@ -283,10 +283,8 @@ pub struct SystemKeychain;
 
 impl SystemKeychain {
     fn entry(account: &str) -> Result<keyring::Entry, BrewError> {
-        keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| {
-            BrewError::KeychainUnavailable {
-                message: format!("entry({KEYCHAIN_SERVICE}, {account}): {e}"),
-            }
+        keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| BrewError::KeychainUnavailable {
+            message: format!("entry({KEYCHAIN_SERVICE}, {account}): {e}"),
         })
     }
 }
@@ -316,11 +314,11 @@ impl KeychainSlot for SystemKeychain {
         // identity churn keeps re-triggering it.)
         let _ = self.delete(account);
         let entry = Self::entry(account)?;
-        entry.set_password(value).map_err(|e| {
-            BrewError::KeychainUnavailable {
+        entry
+            .set_password(value)
+            .map_err(|e| BrewError::KeychainUnavailable {
                 message: format!("write {account}: {e}"),
-            }
-        })
+            })
     }
 
     fn delete(&self, account: &str) -> Result<(), BrewError> {
@@ -372,7 +370,11 @@ fn read_credential(keychain: &dyn KeychainSlot) -> Result<Option<StoredCredentia
         .read(KEYCHAIN_ACCOUNT_SCOPES)?
         .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
         .unwrap_or_default();
-    let cred = StoredCredential { token, username, scopes };
+    let cred = StoredCredential {
+        token,
+        username,
+        scopes,
+    };
     // Best-effort migration; a write failure here still returns the creds so
     // the user stays signed in (a later sign-in re-attempts the write).
     let _ = write_credential(keychain, &cred);
@@ -504,13 +506,10 @@ pub async fn start_device_flow() -> Result<DeviceFlowStart, BrewError> {
             message: e.to_string(),
         })?;
     let status = resp.status();
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| BrewError::Network {
-            url: DEVICE_CODE_URL.into(),
-            message: format!("body: {e}"),
-        })?;
+    let bytes = resp.bytes().await.map_err(|e| BrewError::Network {
+        url: DEVICE_CODE_URL.into(),
+        message: format!("body: {e}"),
+    })?;
     if !status.is_success() {
         return Err(BrewError::HttpStatus {
             url: DEVICE_CODE_URL.into(),
@@ -521,10 +520,7 @@ pub async fn start_device_flow() -> Result<DeviceFlowStart, BrewError> {
         serde_json::from_slice(&bytes).map_err(|e| BrewError::JsonParse {
             command: DEVICE_CODE_URL.into(),
             message: e.to_string(),
-            raw_excerpt: String::from_utf8_lossy(
-                &bytes[..bytes.len().min(256)],
-            )
-            .into_owned(),
+            raw_excerpt: String::from_utf8_lossy(&bytes[..bytes.len().min(256)]).into_owned(),
         })?;
 
     // Clamp interval + expires_in defensively.
@@ -571,10 +567,7 @@ pub async fn poll_device_flow_with(
     let form = [
         ("client_id", GITHUB_OAUTH_CLIENT_ID),
         ("device_code", device_code),
-        (
-            "grant_type",
-            "urn:ietf:params:oauth:grant-type:device_code",
-        ),
+        ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
     ];
     let resp = client
         .post(TOKEN_URL)
@@ -597,8 +590,7 @@ pub async fn poll_device_flow_with(
             status: status.as_u16(),
         });
     }
-    let parsed: TokenResponse =
-        serde_json::from_slice(&bytes).unwrap_or_default();
+    let parsed: TokenResponse = serde_json::from_slice(&bytes).unwrap_or_default();
 
     if let Some(token_str) = parsed.access_token {
         let token = Token::new(token_str)?;
@@ -785,8 +777,14 @@ mod tests {
         let secret = "ghp_supersecrettoken1234567890ABCDEF";
         let t = Token::new(secret).expect("token");
         let dbg = format!("{:?}", t);
-        assert!(!dbg.contains(secret), "Debug must not include token; got {dbg}");
-        assert!(dbg.contains("REDACTED"), "Debug must mention REDACTED; got {dbg}");
+        assert!(
+            !dbg.contains(secret),
+            "Debug must not include token; got {dbg}"
+        );
+        assert!(
+            dbg.contains("REDACTED"),
+            "Debug must mention REDACTED; got {dbg}"
+        );
     }
 
     #[test]
@@ -810,7 +808,11 @@ mod tests {
         let dto = GithubStatusDto {
             signed_in: true,
             username: Some("octocat".into()),
-            scopes: vec!["read:user".into(), "public_repo".into(), "notifications".into()],
+            scopes: vec![
+                "read:user".into(),
+                "public_repo".into(),
+                "notifications".into(),
+            ],
         };
         let json = serde_json::to_string(&dto).expect("serialize");
         let known_token = "ghp_supersecrettoken1234567890ABCDEF";
@@ -822,7 +824,10 @@ mod tests {
             "status DTO must not contain 'access_token': {json}"
         );
         assert!(!json.contains("ghp_"), "status DTO must not contain 'ghp_'");
-        assert!(!json.contains("token"), "status DTO must not contain 'token': {json}");
+        assert!(
+            !json.contains("token"),
+            "status DTO must not contain 'token': {json}"
+        );
         // What it should contain:
         assert!(json.contains("\"signedIn\""));
         assert!(json.contains("\"username\""));
@@ -888,8 +893,7 @@ mod tests {
         // `identifier` field equals our `KEYCHAIN_SERVICE` constant.
         // A drift here means a renamed bundle would silently orphan
         // tokens in the Keychain.
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tauri.conf.json");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
         let raw = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         let v: serde_json::Value = serde_json::from_str(&raw).expect("parse tauri.conf.json");
@@ -915,13 +919,11 @@ mod tests {
         assert!(s0.scopes.is_empty());
 
         // Write token + scopes + username.
-        kc.write(KEYCHAIN_ACCOUNT_TOKEN, "ghp_secret_value").unwrap();
+        kc.write(KEYCHAIN_ACCOUNT_TOKEN, "ghp_secret_value")
+            .unwrap();
         kc.write(KEYCHAIN_ACCOUNT_USERNAME, "octocat").unwrap();
-        kc.write(
-            KEYCHAIN_ACCOUNT_SCOPES,
-            r#"["read:user","public_repo"]"#,
-        )
-        .unwrap();
+        kc.write(KEYCHAIN_ACCOUNT_SCOPES, r#"["read:user","public_repo"]"#)
+            .unwrap();
 
         let s1 = status_with(&kc).expect("status after sign in");
         assert!(s1.signed_in);
@@ -961,8 +963,11 @@ mod tests {
         // on read, and the scopes come back. Scopes now live inside the
         // credential, so a token must be present for them to be readable.
         kc.write(KEYCHAIN_ACCOUNT_TOKEN, "ghp_x").unwrap();
-        kc.write(KEYCHAIN_ACCOUNT_SCOPES, r#"["read:user","public_repo"]"#).unwrap();
-        let scopes = read_scopes_with(&kc).expect("read").expect("Some (signed in)");
+        kc.write(KEYCHAIN_ACCOUNT_SCOPES, r#"["read:user","public_repo"]"#)
+            .unwrap();
+        let scopes = read_scopes_with(&kc)
+            .expect("read")
+            .expect("Some (signed in)");
         assert_eq!(scopes, vec!["read:user", "public_repo"]);
     }
 
@@ -974,7 +979,9 @@ mod tests {
         let kc = MockKeychain::new();
         kc.write(KEYCHAIN_ACCOUNT_TOKEN, "ghp_x").unwrap();
         kc.write(KEYCHAIN_ACCOUNT_SCOPES, "not json").unwrap();
-        let scopes = read_scopes_with(&kc).expect("must not error").expect("signed in");
+        let scopes = read_scopes_with(&kc)
+            .expect("must not error")
+            .expect("signed in");
         assert!(scopes.is_empty(), "corrupt scopes collapse to empty");
     }
 
@@ -999,7 +1006,8 @@ mod tests {
         let kc2 = MockKeychain::new();
         kc2.write(KEYCHAIN_ACCOUNT_TOKEN, "ghp_legacy").unwrap();
         kc2.write(KEYCHAIN_ACCOUNT_USERNAME, "hubot").unwrap();
-        kc2.write(KEYCHAIN_ACCOUNT_SCOPES, r#"["read:user"]"#).unwrap();
+        kc2.write(KEYCHAIN_ACCOUNT_SCOPES, r#"["read:user"]"#)
+            .unwrap();
         assert!(status_with(&kc2).expect("status").signed_in);
         assert!(
             kc2.read(KEYCHAIN_ACCOUNT_CREDENTIAL).unwrap().is_some(),

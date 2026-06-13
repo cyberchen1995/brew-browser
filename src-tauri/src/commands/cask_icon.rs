@@ -46,13 +46,13 @@ use crate::state::AppState;
 // unused on non-macOS targets where `cask_icon` short-circuits to
 // `Ok(None)`, so gate them to avoid dead-code warnings on the Linux build.
 #[cfg(target_os = "macos")]
-use tokio::process::Command;
-#[cfg(target_os = "macos")]
 use crate::brew::exec::run_brew_capture;
 #[cfg(target_os = "macos")]
 use crate::brew::parse::RawInfoV2;
 #[cfg(target_os = "macos")]
 use crate::error::truncate_head;
+#[cfg(target_os = "macos")]
+use tokio::process::Command;
 
 /// Cache TTL — re-extract if the cached PNG is older than this.
 const ICON_CACHE_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -176,12 +176,7 @@ async fn resolve_app_path(
 ) -> Result<Option<PathBuf>, BrewError> {
     let path = state.require_brew_path().await?;
     let display = format!("brew info --json=v2 --cask {}", token);
-    let raw = match run_brew_capture(
-        &path,
-        &["info", "--json=v2", "--cask", token],
-        &display,
-    )
-    .await
+    let raw = match run_brew_capture(&path, &["info", "--json=v2", "--cask", token], &display).await
     {
         Ok(s) => s,
         // If brew refused (unknown cask, network blip, etc.), treat as
@@ -381,7 +376,9 @@ async fn first_icns_in_dir(dir: &Path) -> Option<PathBuf> {
     let mut entries: Vec<PathBuf> = Vec::new();
     while let Ok(Some(entry)) = rd.next_entry().await {
         let p = entry.path();
-        if p.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("icns"))
+        if p.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("icns"))
             .unwrap_or(false)
         {
             entries.push(p);
@@ -481,7 +478,10 @@ mod tests {
         let artifacts = Some(json!([
             { "app": ["Firefox.app"] }
         ]));
-        assert_eq!(first_app_filename(&artifacts).as_deref(), Some("Firefox.app"));
+        assert_eq!(
+            first_app_filename(&artifacts).as_deref(),
+            Some("Firefox.app")
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -664,7 +664,11 @@ mod tests {
         // Even though the candidate filename is benign, the canonicalized
         // target is outside Resources/ — must be rejected.
         let r = safe_join_in_resources(&resources, "Icon.icns");
-        assert!(r.is_none(), "symlink escape should be rejected, got {:?}", r);
+        assert!(
+            r.is_none(),
+            "symlink escape should be rejected, got {:?}",
+            r
+        );
     }
 
     #[cfg(target_os = "macos")]

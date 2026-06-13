@@ -216,9 +216,7 @@ fn validate_and_truncate(data: &mut EnrichmentData) {
         // `similar` — drop any token that fails the package-name
         // validator (defense against LLM hallucination + a future
         // swapped bundle smuggling bogus tokens).
-        entry
-            .similar
-            .retain(|t| validate_package_name(t).is_ok());
+        entry.similar.retain(|t| validate_package_name(t).is_ok());
         entry.similar.truncate(MAX_SIMILAR_COUNT);
 
         entry.tags.truncate(MAX_TAGS_COUNT);
@@ -227,7 +225,10 @@ fn validate_and_truncate(data: &mut EnrichmentData) {
             // Defense-in-depth: tags must be `[a-z0-9-]`. Drop the
             // entry if it isn't — empty result is fine, the field just
             // disappears from the UI.
-            if !t.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+            if !t
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            {
                 t.clear();
             }
         }
@@ -339,10 +340,10 @@ mod tests {
                 similar: vec![
                     "wget".into(),
                     "curl".into(),
-                    "-rf".into(),       // leading dash
-                    "evil; rm -rf".into(),  // spaces + semicolon
-                    "foo$bar".into(),   // metachar
-                    "".into(),          // empty
+                    "-rf".into(),          // leading dash
+                    "evil; rm -rf".into(), // spaces + semicolon
+                    "foo$bar".into(),      // metachar
+                    "".into(),             // empty
                     "valid-pkg".into(),
                 ],
                 ..Default::default()
@@ -350,7 +351,14 @@ mod tests {
         );
         validate_and_truncate(&mut data);
         let sim = &data.entries["qux"].similar;
-        assert_eq!(sim, &["wget".to_string(), "curl".to_string(), "valid-pkg".to_string()]);
+        assert_eq!(
+            sim,
+            &[
+                "wget".to_string(),
+                "curl".to_string(),
+                "valid-pkg".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -361,8 +369,8 @@ mod tests {
             .into_iter()
             .chain(vec![
                 "valid-tag".to_string(),
-                "BadCaps".to_string(),     // uppercase — dropped
-                "has space".to_string(),    // space — dropped
+                "BadCaps".to_string(),          // uppercase — dropped
+                "has space".to_string(),        // space — dropped
                 "weird_underscore".to_string(), // underscore — dropped
             ])
             .collect();

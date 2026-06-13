@@ -111,9 +111,7 @@ async fn ensure_cache_hydrated(state: &State<'_, AppState>) {
 /// which is the same path the rest of the app uses. Formulae only —
 /// casks aren't supported by `brew vulns` (it queries OSV via source
 /// repo URLs, which casks don't have).
-async fn compute_install_fingerprint(
-    state: &State<'_, AppState>,
-) -> Result<String, BrewError> {
+async fn compute_install_fingerprint(state: &State<'_, AppState>) -> Result<String, BrewError> {
     // Try the existing cache first — read lock, cheap.
     let cached_fp = {
         let guard = state.installed_cache.read().await;

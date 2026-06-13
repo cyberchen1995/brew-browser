@@ -171,11 +171,7 @@ impl AppState {
         let cache_dir = resolve_cache_dir()?;
         if !cache_dir.exists() {
             std::fs::create_dir_all(&cache_dir).map_err(|e| BrewError::Io {
-                message: format!(
-                    "could not create cache dir {}: {}",
-                    cache_dir.display(),
-                    e
-                ),
+                message: format!("could not create cache dir {}: {}", cache_dir.display(), e),
             })?;
         }
         let app_data_dir = resolve_app_data_dir()?;
@@ -546,7 +542,11 @@ mod tests {
             message: "x".into(),
         })
         .await;
-        for feat in ["trending_fetch", "cask_icon_from_homepage", "catalog_refresh"] {
+        for feat in [
+            "trending_fetch",
+            "cask_icon_from_homepage",
+            "catalog_refresh",
+        ] {
             let r = state.require_network(feat).await;
             match r {
                 Err(BrewError::ParanoidModeBlocked { feature }) => {
@@ -745,7 +745,10 @@ mod tests {
         state.set_brew_path(None).await;
         let detected = state.redetect_brew_path().await;
         let cached = state.brew_path.read().await.clone();
-        assert_eq!(cached, detected, "redetect must write its result into brew_path");
+        assert_eq!(
+            cached, detected,
+            "redetect must write its result into brew_path"
+        );
         assert_eq!(detected, resolve_brew_path());
     }
 }

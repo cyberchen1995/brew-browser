@@ -21,9 +21,7 @@ use crate::state::AppState;
 /// Return the full enrichment payload. Memoised on `AppState` so
 /// subsequent calls are an Arc-clone, not a re-parse.
 #[tauri::command]
-pub async fn enrichment_data(
-    state: State<'_, AppState>,
-) -> Result<Arc<EnrichmentData>, BrewError> {
+pub async fn enrichment_data(state: State<'_, AppState>) -> Result<Arc<EnrichmentData>, BrewError> {
     {
         let cached = state.enrichment_cache.lock().await;
         if let Some(data) = cached.as_ref() {
