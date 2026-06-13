@@ -59,9 +59,13 @@ for b in "$BINDIR"/*.bundle; do
   bname="$(basename "$b")"
   dest="$APP/Contents/Resources/$bname"
   cp -R "$b" "$dest"
-  # Synthesize a minimal Info.plist if SwiftPM didn't emit one, so codesign
-  # treats it as a real bundle.
-  if [ ! -f "$dest/Info.plist" ]; then
+  # Synthesize a minimal Info.plist ONLY when SwiftPM emitted a flat bundle
+  # with no Info.plist anywhere. Newer toolchains (Xcode 27) emit a structured
+  # bundle (Contents/Info.plist + Contents/Resources/…); adding a second
+  # Info.plist at the bundle root there produces a hybrid that codesign
+  # --deep --strict rejects ("unsealed contents present in the bundle root").
+  # So skip synthesis when either a root OR a Contents/ Info.plist exists.
+  if [ ! -f "$dest/Info.plist" ] && [ ! -f "$dest/Contents/Info.plist" ]; then
     # bundle id: strip .bundle, lowercase — e.g. com.zerologic.brew-browser-native.BrewBrowser_BrewBrowserKit
     bid="com.zerologic.brew-browser-native.${bname%.bundle}"
     cat > "$dest/Info.plist" <<PLIST

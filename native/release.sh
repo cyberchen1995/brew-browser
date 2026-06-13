@@ -41,7 +41,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"
 
 : "${DEVELOPER_ID_APP:?set DEVELOPER_ID_APP to your 'Developer ID Application: …' identity}"
-: "${NOTARY_PROFILE:?set NOTARY_PROFILE to your notarytool keychain profile (see header)}"
+# Notarization credentials: reuse the same Apple ID / app-specific password /
+# team ID that the Tauri build uses (from ~/.config/brew-browser/signing.env),
+# rather than a separate notarytool keychain profile. Either works; this keeps
+# one credential source for both shells.
+: "${APPLE_ID:?set APPLE_ID (source ~/.config/brew-browser/signing.env)}"
+: "${APPLE_PASSWORD:?set APPLE_PASSWORD (app-specific pw; source signing.env)}"
+: "${APPLE_TEAM_ID:?set APPLE_TEAM_ID (source signing.env)}"
 DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-https://brew-browser.zerologic.com/native/}"
 OUT_DIR="${OUT_DIR:-$HERE/dist}"
 
@@ -95,7 +101,7 @@ for arch in "${ARCHES[@]}"; do
   ditto -c -k --keepParent "$APP" "$ZIP"
 
   echo "==> [$arch] notarize (waits for Apple)"
-  xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun notarytool submit "$ZIP" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
   echo "==> [$arch] staple"
   xcrun stapler staple "$APP"
   rm -f "$ZIP"                     # re-zip so the download carries the ticket
@@ -106,12 +112,40 @@ for arch in "${ARCHES[@]}"; do
   cp -R "$APP" "$WORK/$arch/BrewBrowser.app"
 done
 
+# Defensive: relocate any stray .dmg sitting in $OUT_DIR's root into $DMG_DIR
+# before scanning. generate_appcast treats a .dmg and a .zip of the SAME bundle
+# version as duplicate updates and aborts (SUSparkleErrorDomain 1002). Legacy
+# releases (e.g. 0.1.0) left their .dmg in $OUT_DIR root, which collides with
+# that version's .zip on the next run. The current convention keeps dmgs in
+# $DMG_DIR (never scanned); sweep any old ones there too so the scan is clean.
+shopt -s nullglob
+for stray in "$OUT_DIR"/*.dmg; do
+  echo "==> moving stray dmg out of appcast scan dir: $(basename "$stray") -> dmg/"
+  mv "$stray" "$DMG_DIR/"
+done
+
+# Sparkle's generate_appcast (current tooling) treats two archives that share a
+# CFBundleVersion as DUPLICATE updates and aborts (SUSparkleErrorDomain 1002) —
+# it does NOT coexist same-version arches in one feed via hardwareRequirements.
+# Apple Silicon is the primary platform and Intel macOS is sunsetting (macOS 28
+# drops Rosetta), so the Sparkle AUTO-UPDATE feed is arm64-only: sideline any
+# non-arm64 (x86_64) zip out of the scan dir before generating. Both arches'
+# .dmgs are still built below for FIRST-INSTALL download — only the auto-update
+# feed is arm64. (If Intel auto-update is ever needed: dual per-arch feeds with
+# a per-arch SUFeedURL baked into Info.plist — see git history of this script.)
+SIDELINE_DIR="$OUT_DIR/no-feed"
+mkdir -p "$SIDELINE_DIR"
+for nonarm in "$OUT_DIR"/*-x86_64.zip; do
+  echo "==> sidelining non-arm64 zip from arm64 feed: $(basename "$nonarm") -> no-feed/"
+  mv "$nonarm" "$SIDELINE_DIR/"
+done
+shopt -u nullglob
+
 # generate_appcast runs ONCE over $OUT_DIR, which at this point holds ONLY the
-# .zips (this release's two arches + prior releases' history) — the dmgs don't
-# exist yet and land in $DMG_DIR, which it never scans. Sparkle emits
-# sparkle:hardwareRequirements per archive, which is how two same-version items
-# (one per arch) coexist in one feed (the 0.1.0 appcast demonstrated this).
-echo "==> generate appcast (signs with the Sparkle private key in your Keychain)"
+# arm64 .zips (this release + prior arm64 history) — non-arm64 zips were
+# sidelined above, and the dmgs don't exist yet (they land in $DMG_DIR, which
+# generate_appcast never scans).
+echo "==> generate appcast (arm64 feed; signs with the Sparkle private key in your Keychain)"
 "$SPARKLE_BIN/generate_appcast" --download-url-prefix "$DOWNLOAD_URL_PREFIX" "$OUT_DIR"
 
 # Disk images for FIRST-INSTALL download (humans prefer a .dmg; Sparkle uses the
@@ -129,31 +163,28 @@ for arch in "${ARCHES[@]}"; do
   hdiutil create -volname "Brew Browser" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
   codesign --force --timestamp --sign "$DEVELOPER_ID_APP" "$DMG"
   echo "==> [$arch] notarize dmg (waits for Apple)"
-  xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
   xcrun stapler staple "$DMG"
 done
 
-# Post-run sanity: the appcast must carry ONE item per arch for this version,
-# each with sparkle:hardwareRequirements — that's how a single feed serves both
-# arches. Counted here so a bad feed never ships silently.
+# Post-run sanity: the auto-update feed is arm64-only (Intel macOS is sunsetting
+# and Sparkle won't coexist same-version arches in one feed), so the appcast
+# must carry exactly the arm64 enclosure for this version. Counted here so a
+# bad/empty feed never ships silently.
 APPCAST="$OUT_DIR/appcast.xml"
-ITEM_COUNT="$(grep -c "BrewBrowser-$VERSION-" "$APPCAST" 2>/dev/null || true)"
-HW_COUNT="$(grep -c "sparkle:hardwareRequirements" "$APPCAST" 2>/dev/null || true)"
+ITEM_COUNT="$(grep -c "BrewBrowser-$VERSION-arm64.zip" "$APPCAST" 2>/dev/null || true)"
 
 echo
 echo "==> done."
 echo "   Post-run checklist:"
-echo "   [ ] appcast.xml has one <item> per arch for $VERSION (found $ITEM_COUNT enclosure(s) matching BrewBrowser-$VERSION-<arch>.zip)"
-echo "   [ ] each item carries sparkle:hardwareRequirements (found $HW_COUNT in the feed)"
-echo "   [ ] spot-check: grep -A3 \"BrewBrowser-$VERSION-\" \"$APPCAST\""
-if [ "${ITEM_COUNT:-0}" -lt 2 ] || [ "${HW_COUNT:-0}" -lt 2 ]; then
+echo "   [ ] appcast.xml advertises the arm64 build of $VERSION (found $ITEM_COUNT arm64 enclosure(s))"
+echo "   [ ] spot-check: grep -A3 \"BrewBrowser-$VERSION-arm64.zip\" \"$APPCAST\""
+if [ "${ITEM_COUNT:-0}" -lt 1 ]; then
   echo
   echo "   ############################################################################"
-  echo "   ## WARNING: appcast.xml does NOT look right for a dual-arch release.      ##"
-  echo "   ## generate_appcast may have collapsed/dropped the two same-version zips. ##"
-  echo "   ## FALLBACK PLAN: dual feeds — generate appcast-arm64.xml and             ##"
-  echo "   ## appcast-x86_64.xml from per-arch zip dirs, and have build-app.sh bake  ##"
-  echo "   ## a per-arch SUFeedURL into Info.plist. Do NOT ship this appcast as-is.  ##"
+  echo "   ## WARNING: appcast.xml does NOT advertise the arm64 build of $VERSION.    "
+  echo "   ## generate_appcast may have failed or the arm64 zip was missing/sidelined.##"
+  echo "   ## Do NOT ship this appcast as-is — investigate before publishing.        ##"
   echo "   ############################################################################"
 fi
 echo

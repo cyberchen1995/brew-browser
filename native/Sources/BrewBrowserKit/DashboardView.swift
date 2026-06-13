@@ -241,6 +241,11 @@ struct UpdatesCard: View {
                             // Version column — fixed width, right-aligned.
                             Text("\(p.installedVersion) → \(p.currentVersion)")
                                 .font(.callout).foregroundStyle(.secondary).monospaced()
+                                // Keep the "old → new" pair on one line; scale down
+                                // to fit rather than wrap/truncate long cask versions
+                                // (e.g. docker-desktop's "4.77.0,228796"). Parity with
+                                // the Tauri Dashboard's white-space:nowrap.
+                                .lineLimit(1).minimumScaleFactor(0.7)
                                 .frame(width: 200, alignment: .trailing)
                         }
                         .contentShape(.rect)

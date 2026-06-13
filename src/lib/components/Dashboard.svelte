@@ -1234,7 +1234,11 @@
   .outdated-row.selected .o-version { color: inherit; }
   .outdated-list li:last-child .outdated-row { border-bottom: none; }
   .o-name { font-weight: var(--fw-medium); }
-  .o-version { font-size: var(--text-body-sm); }
+  /* Keep the "old → new" version pair on one line — never break between a
+     version and its arrow. The name column (minmax(0,1fr) + .truncate) absorbs
+     any width pressure instead, so long cask versions (e.g. docker-desktop's
+     "4.77.0,228796") stay readable as a single row. */
+  .o-version { font-size: var(--text-body-sm); white-space: nowrap; }
 
   /* ─── Split ───────────────────────────────────────────── */
   .split { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
