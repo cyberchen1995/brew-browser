@@ -1,29 +1,25 @@
-## brew-browser 0.6.0 / Brew Browser native 0.2.0 — feature-request batch
+## brew-browser / Brew Browser native — next release (staging)
 
 Staged for the next signed + notarized release. Tauri remains the macOS 13+ /
-Linux build; native remains the macOS 26 SwiftUI build.
+Linux build; native remains the macOS 26 SwiftUI build. Version numbers are
+assigned when the release is cut.
 
 > **Staging file.** Add notes here as changes land; rename to
 > `docs/release-notes/<version>.md` when the next version is cut.
 
 ### What's new
 
-- **Reverse dependencies in package detail.** Package pages can show which
-  installed packages require the selected formula.
-- **Deprecated / disabled indicators.** Rows and detail panels surface Homebrew's
-  deprecation and disablement metadata instead of hiding lifecycle state.
-- **Manual vs Dependency Library filters.** Library filtering can separate
-  packages the user requested from formulae installed only as dependencies.
-- **Per-package disk size.** Package detail can show the on-disk Cellar/Caskroom
-  footprint for installed packages.
-- **Discover subcategories.** Large Discover categories gain a second-level
-  grouping layer so broad buckets are easier to scan.
-
-### Bug fixes
-
-- Documentation and package metadata are aligned with the next release train:
-  Tauri `0.6.0`, native `0.2.0`.
+- **Cache maintenance on the Dashboard.** The Storage card gains two actions,
+  both streamed into the Activity drawer:
+  - **Run brew doctor** — runs `brew doctor` and shows the diagnostics live
+    (advisories are surfaced as info, not a failure).
+  - **Clean up cache…** — `brew cleanup --prune=all` to reclaim cached
+    downloads, with a "frees ~X" estimate and a confirm step. `--scrub` (also
+    clears the current versions' downloads) is an opt-in toggle, off by default.
+  - Both shells, in parity (#80).
 
 ### Acknowledgments
 
-- Reddit feature-request feedback that shaped this batch.
+- **@modeezie** — the Brew Doctor / Cleanup cache-maintenance request, with a
+  nicely scoped "show me what it's doing" ask and the safer non-scrub default
+  suggestion (#80).
