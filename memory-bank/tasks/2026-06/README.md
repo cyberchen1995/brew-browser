@@ -31,6 +31,7 @@ Native macOS build under `native/`.
 | 12 | [Release: Tauri 0.5.1 + native 0.1.0 (first native release) — SHIPPED](./12-release-v0.5.1-native-0.1.0.md) | 2026-06-07 | `v0.5.1` tag / `main` |
 | 13 | [Intel (x86_64) builds + missing-Homebrew onboarding + Linux integration](./13-intel-builds-onboarding-linux.md) | 2026-06-10/11 | `feat/intel-builds-and-onboarding` |
 | 14 | [Discover sub-categories (feature #6) + Reddit feature-request batch #1–#6](./14-discover-subcategories.md) | 2026-06-13 | `feat/feature-requests` |
+| 15 | [Brew Doctor / Cleanup + cache maintenance (PLAN, issue #80)](./15-doctor-cleanup-plan.md) | 2026-06-14 | `feat/doctor-cleanup` |
 
 ## Tauri track (`main`)
 
