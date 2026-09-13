@@ -331,11 +331,15 @@ struct VulnsService: Sendable {
     /// Returns the exit code rather than throwing on non-zero so callers
     /// can apply the right exit-code policy per command (GOTCHA #1: scans
     /// treat exit 1 as success; install does not).
+    ///
+    /// Spawns through `BrewService.brewInvocation` so this path gets the same
+    /// Rosetta 2 `arch -arm64` bridge as every other brew spawn (issue #158).
     private func run(_ args: [String]) throws -> ProcessResult {
         guard let brewPath else { throw VulnsServiceError.brewNotFound }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: brewPath)
-        process.arguments = args
+        let invocation = BrewService.brewInvocation(brew: brewPath, args: args)
+        process.executableURL = invocation.executable
+        process.arguments = invocation.arguments
         process.currentDirectoryURL = URL(fileURLWithPath: "/")
         process.standardInput = FileHandle.nullDevice
         process.environment = BrewService.brewEnvironment()
