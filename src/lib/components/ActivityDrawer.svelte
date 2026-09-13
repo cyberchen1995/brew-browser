@@ -546,10 +546,10 @@
     white-space: pre-wrap;
     word-break: break-all;
   }
-  .line.header  { color: var(--color-info); }
-  .line.error   { color: var(--color-danger); }
-  .line.warning { color: var(--color-warning); }
-  .line.success { color: var(--color-success); }
+  .line.header  { color: var(--color-console-info); }
+  .line.error   { color: var(--color-console-danger); }
+  .line.warning { color: var(--color-console-warning); }
+  .line.success { color: var(--color-console-success); }
   .line.dim     { color: var(--color-console-dim); }
 
   .muted { color: var(--color-console-dim); }

@@ -5,6 +5,12 @@
 
 /* ---------- LIGHT MODE (default) ---------- */
 :root {
+  /* Tells the engine to render UA-drawn chrome light: native <select>
+     popups, scrollbars, form controls. Those are platform widgets outside
+     the DOM — on Linux/WebKitGTK the `<select>` list is a real GTK popup —
+     so no amount of page CSS reaches them; only `color-scheme` does. */
+  color-scheme: light;
+
   /* Brand — warm amber, brew-bottle */
   --color-brand:           oklch(67% 0.15 45);
   --color-brand-hover:     oklch(62% 0.16 45);
@@ -54,10 +60,22 @@
   --color-selection:       oklch(92% 0.05 250);
   --color-selection-strong: oklch(60% 0.16 250);
 
-  /* Console */
-  --color-console-bg:      oklch(20% 0.005 95);
-  --color-console-fg:      oklch(92% 0.005 95);
-  --color-console-dim:     oklch(65% 0.005 95);
+  /* Console — the Activity drawer's output pane. It follows the theme like
+     every other surface: in light mode it sits one step below
+     surface-sunken (96%), mirroring how the dark console (12%) sits below
+     dark surface-sunken (15%). A permanently-dark slab in an otherwise
+     light window reads as an unthemed hole.
+     The semantic line colors are console-specific rather than the app's,
+     because those are tuned for the app surface: `--color-warning` is
+     documented at ~2.9:1 on a light background, which would be unreadable
+     here. Light mode reuses the audited AA-passing dark variants. */
+  --color-console-bg:      oklch(95% 0.003 95);
+  --color-console-fg:      oklch(24% 0.005 95);
+  --color-console-dim:     oklch(48% 0.005 95);
+  --color-console-info:    oklch(40% 0.15 250);  /* = --color-info-on-subtle */
+  --color-console-success: oklch(45% 0.14 150);  /* = --color-success-on-subtle */
+  --color-console-warning: oklch(48% 0.14 75);   /* = --color-warning-strong */
+  --color-console-danger:  oklch(45% 0.20 27);   /* = --color-danger-on-subtle */
 
   /* Shadows */
   --shadow-xs:  0 1px 2px 0 rgb(0 0 0 / 0.05);
@@ -70,6 +88,9 @@
 
 /* ---------- DARK MODE ---------- */
 [data-theme="dark"] {
+  /* Dark counterpart of the `color-scheme` in `:root` — see the note there. */
+  color-scheme: dark;
+
   /* Brand */
   --color-brand:           oklch(72% 0.16 50);
   --color-brand-hover:     oklch(78% 0.15 50);
@@ -118,10 +139,16 @@
   --color-selection:       oklch(30% 0.10 250);
   --color-selection-strong: oklch(60% 0.18 250);
 
-  /* Console */
+  /* Console — unchanged dark values; on a dark console the app's own
+     semantic colors already carry enough contrast, so the console-specific
+     tokens just alias them. See the note in the light block. */
   --color-console-bg:      oklch(12% 0.003 270);
   --color-console-fg:      oklch(90% 0.005 95);
   --color-console-dim:     oklch(60% 0.005 95);
+  --color-console-info:    var(--color-info);
+  --color-console-success: var(--color-success);
+  --color-console-warning: var(--color-warning);
+  --color-console-danger:  var(--color-danger);
 
   /* Shadows */
   --shadow-xs:  0 1px 2px 0 rgb(0 0 0 / 0.30);
