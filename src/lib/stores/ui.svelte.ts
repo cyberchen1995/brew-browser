@@ -411,6 +411,28 @@ class UiStore {
   }
 }
 
+/**
+ * Push the resolved theme to the OS window chrome.
+ *
+ * `data-theme` only reaches our own stylesheet. The title bar is drawn by the
+ * platform, not by us: on Linux `setTheme` lands in GTK as
+ * `gtk-application-prefer-dark-theme` (tao `platform_impl/linux/event_loop.rs`
+ * `WindowRequest::SetTheme`), which is the only channel that makes the window
+ * decoration follow the in-app setting. Tauri documents it as app-wide rather
+ * than per-window on Linux/macOS, which is what we want.
+ *
+ * Best-effort by design: dynamically imported so a plain `npm run dev` browser
+ * session (no Tauri IPC) still works, and failures are swallowed — window
+ * chrome is cosmetic and must never take the app down with it.
+ */
+function applyWindowTheme(resolved: "light" | "dark") {
+  void import("@tauri-apps/api/window")
+    .then(({ getCurrentWindow }) => getCurrentWindow().setTheme(resolved))
+    .catch(() => {
+      /* not running under Tauri, or the platform doesn't support set_theme */
+    });
+}
+
 function applyTheme(t: ThemePreference) {
   if (typeof document === "undefined") return;
   const html = document.documentElement;
@@ -421,6 +443,7 @@ function applyTheme(t: ThemePreference) {
     resolved = t;
   }
   html.dataset.theme = resolved;
+  applyWindowTheme(resolved);
 }
 
 /** Subscribe matchMedia to flip data-theme when "system" is selected. */
@@ -429,7 +452,9 @@ export function watchSystemTheme(getCurrent: () => ThemePreference) {
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
   const handler = () => {
     if (getCurrent() === "system") {
-      document.documentElement.dataset.theme = mq.matches ? "dark" : "light";
+      const resolved = mq.matches ? "dark" : "light";
+      document.documentElement.dataset.theme = resolved;
+      applyWindowTheme(resolved);
     }
   };
   mq.addEventListener("change", handler);

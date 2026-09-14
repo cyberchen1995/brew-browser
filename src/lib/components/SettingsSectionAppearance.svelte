@@ -13,6 +13,7 @@
 
   import { ui, VIBRANCY_MATERIALS, type VibrancyMaterial } from "$lib/stores/ui.svelte";
   import { settings } from "$lib/stores/settings.svelte";
+  import { isMac } from "$lib/util/platform";
   import type { SidebarSection, ThemePreference } from "$lib/types";
 
   /** Sections the user can pick as their default landing page. Mirrors the
@@ -83,7 +84,7 @@
         <Monitor size={14} /> System
       </button>
     </div>
-    <p class="hint">Follows the macOS theme when set to System.</p>
+    <p class="hint">Follows the {isMac ? "macOS" : "desktop"} theme when set to System.</p>
   </div>
 
   <div class="field">
@@ -101,21 +102,26 @@
     <p class="hint">Which section opens when you launch brew-browser.</p>
   </div>
 
-  <div class="field">
-    <label for="vibrancy-material">Window vibrancy</label>
-    <select
-      id="vibrancy-material"
-      class="select"
-      value={ui.vibrancyMaterial}
-      onchange={onVibrancyChange}
-    >
-      {#each VIBRANCY_MATERIALS as m (m)}
-        <option value={m}>{m}</option>
-      {/each}
-    </select>
-    <p class="hint">Requires app restart to take effect. The default
-      (HudWindow) matches the rest of macOS.</p>
-  </div>
+  <!-- Vibrancy is NSVisualEffectView material selection — a macOS-only
+       concept with no Linux equivalent, so the whole field is gated rather
+       than just its copy. Same treatment as casks in the WS3 Linux sweep. -->
+  {#if isMac}
+    <div class="field">
+      <label for="vibrancy-material">Window vibrancy</label>
+      <select
+        id="vibrancy-material"
+        class="select"
+        value={ui.vibrancyMaterial}
+        onchange={onVibrancyChange}
+      >
+        {#each VIBRANCY_MATERIALS as m (m)}
+          <option value={m}>{m}</option>
+        {/each}
+      </select>
+      <p class="hint">Requires app restart to take effect. The default
+        (HudWindow) matches the rest of macOS.</p>
+    </div>
+  {/if}
 
   <div class="field ai-features">
     <div class="ai-row">
