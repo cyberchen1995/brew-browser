@@ -44,10 +44,9 @@
 #            }
 #          }
 #        }
-#   6. Echoes (but does NOT execute) the rsync command the user runs
-#      to publish the manifest to brew-browser.zerologic.com via
-#      umacbookpro:Sites/brew-browser/updater.json. Publishing is a
-#      deliberate manual step.
+#   6. Points at tools/release/publish-release.sh, which publishes the
+#      manifest to the web root that serves the update feed. Publishing
+#      stays a separate, deliberate step — this script only generates.
 #
 # What it does NOT do:
 #   - Generate the minisign keypair (one-time setup, see BUILD.md).
@@ -296,7 +295,7 @@ else
 fi
 echo ""
 echo "next steps (run manually):"
-echo "  1. rsync -av $MANIFEST_PATH umacbookpro:Sites/brew-browser/updater.json"
+echo "  1. tools/release/publish-release.sh --tauri ${VERSION}   # publishes $MANIFEST_PATH"
 echo "  2. gh release create v${VERSION} \\"
 echo "       src-tauri/target/release/bundle/dmg/brew-browser_${VERSION}_aarch64.dmg \\"
 if [[ $HAVE_X64 -eq 1 ]]; then
