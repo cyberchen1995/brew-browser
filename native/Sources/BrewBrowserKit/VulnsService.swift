@@ -506,10 +506,31 @@ struct VulnsService: Sendable {
         if let array = try? decoder.decode([ScanRecord].self, from: data) {
             return array
         }
-        if let single = try? decoder.decode(ScanRecord.self, from: data) {
+        // Homebrew 6.0+ absorbed `brew vulns` as a built-in and wraps the
+        // records in an envelope: {"findings": [...], "skipped_formulae": [...]}.
+        // The old external brew-vulns formula emitted a bare array. Both exist
+        // in the wild, so accept either. Mirrors the Rust `FindingsEnvelope`.
+        if let envelope = try? decoder.decode(FindingsEnvelope.self, from: data) {
+            return envelope.findings
+        }
+        // Single bare record. MUST come last and MUST be validated: ScanRecord's
+        // decoder defaults every field, so ANY object decodes vacuously into a
+        // blank record with zero findings. That is precisely how the 6.0
+        // envelope used to be swallowed — the Exposure card reported "no known
+        // vulnerabilities" on a machine with 20 real ones. No formula name means
+        // it is not a scan record; reject it so the caller can surface a decode
+        // failure instead.
+        if let single = try? decoder.decode(ScanRecord.self, from: data), !single.formula.isEmpty {
             return [single]
         }
         return nil
+    }
+
+    /// Homebrew 6.0+ `brew vulns --json` envelope. `skipped_formulae` is
+    /// deliberately not modelled — it carries no finding data and its absence
+    /// must never fail the decode.
+    private struct FindingsEnvelope: Decodable {
+        let findings: [ScanRecord]
     }
 
     /// Extract the JSON document from line-oriented CLI noise: from the first

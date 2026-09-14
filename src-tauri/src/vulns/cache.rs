@@ -51,8 +51,17 @@ pub const VULNS_CACHE_MAX_ENTRIES: usize = 1000;
 pub const MAX_VULNS_CACHE_BYTES: u64 = 1024 * 1024;
 
 /// Bump when the on-disk format changes in a way that requires
-/// migration. v0 means "no file at all"; v1 is the initial shape.
-pub const VULNS_CACHE_SCHEMA_VERSION: u32 = 1;
+/// migration, **or when previously-written entries are known to be
+/// wrong**. v0 means "no file at all"; v1 was the initial shape.
+///
+/// v2 (0.7.3): v1 files can contain a poisoned scan. Before the
+/// `findings`-envelope fix, Homebrew 6.0+ output decoded vacuously into a
+/// single blank record, so the cache recorded `formula::` with zero
+/// vulnerabilities and an install fingerprint that still matches. Left
+/// alone, an updated app would serve that "clean" result until the
+/// fingerprint changed or the 6h TTL lapsed — the fix would look like it
+/// had not landed. Bumping invalidates those files on first launch.
+pub const VULNS_CACHE_SCHEMA_VERSION: u32 = 2;
 
 /// On-disk shape. Serialized as JSON with camelCase keys to match the
 /// rest of the persisted state. Every field has `#[serde(default)]` so
@@ -178,9 +187,15 @@ impl VulnsCache {
         match read_capped(&path, MAX_VULNS_CACHE_BYTES).await {
             Ok(bytes) => match serde_json::from_slice::<VulnsCacheFile>(&bytes) {
                 Ok(file) => {
-                    if file.schema_version > VULNS_CACHE_SCHEMA_VERSION {
+                    // Any version mismatch — older OR newer — starts empty.
+                    // Older matters as much as newer: a v1 file may hold the
+                    // poisoned blank scan described on
+                    // [`VULNS_CACHE_SCHEMA_VERSION`], and silently trusting it
+                    // would mask the envelope fix. Discarding costs exactly one
+                    // re-scan.
+                    if file.schema_version != VULNS_CACHE_SCHEMA_VERSION {
                         tracing::warn!(
-                            "vulns cache: schema {} newer than supported {}; ignoring",
+                            "vulns cache: schema {} != supported {}; discarding and re-scanning",
                             file.schema_version,
                             VULNS_CACHE_SCHEMA_VERSION
                         );
@@ -589,6 +604,40 @@ mod tests {
         // Fail-soft: corrupt cache file → empty cache, not a panic.
         // Losing the cache only costs one re-scan.
         assert!(c.file.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_discards_older_schema_so_poisoned_v1_scans_cannot_survive() {
+        // A v1 file can hold the pre-0.7.3 poisoned scan: the Homebrew 6.0+
+        // `{"findings": […]}` envelope decoded vacuously into one blank record,
+        // so the cache recorded `formula::` with zero vulnerabilities under an
+        // install fingerprint that still matches today. Trusting an older
+        // schema would serve that "clean" verdict straight past the fix.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut old = VulnsCacheFile {
+            schema_version: 1,
+            install_fingerprint: "still-matches-today".into(),
+            ..Default::default()
+        };
+        old.entries.insert(
+            "formula::".to_string(),
+            ScanRecord {
+                scanned_at: Utc::now(),
+                vulns: Vec::new(),
+            },
+        );
+        let bytes = serde_json::to_vec(&old).unwrap();
+        tokio::fs::write(cache_path(tmp.path()), bytes).await.unwrap();
+
+        let c = VulnsCache::load(tmp.path()).await;
+        assert!(
+            c.file.entries.is_empty(),
+            "a v1 cache must be discarded, not trusted"
+        );
+        assert_eq!(
+            c.file.install_fingerprint, "",
+            "the stale fingerprint must not survive either, or the re-scan is skipped"
+        );
     }
 
     #[tokio::test]
