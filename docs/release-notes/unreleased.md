@@ -41,3 +41,59 @@ six hours after updating. The cache schema version is bumped, which discards
 those files on first launch and forces one fresh scan.
 
 If you run brew 6.0 or newer, **re-check the Exposure card after updating.**
+
+### Rosetta 2: brew now works when the Intel build runs on Apple Silicon
+
+Installing the Intel (x64) download on an Apple Silicon Mac leaves the app
+running under Rosetta 2. Every `brew` it spawned then failed with *"Cannot
+install under Rosetta 2 in ARM default prefix"* — while the same command worked
+fine in Terminal, because that `brew` runs natively. The app looked broken for a
+reason that had nothing to do with the app.
+
+Both shells now detect translation at runtime (`sysctl.proc_translated` — the
+compile-time architecture check cannot see it, since an x64 binary reports
+itself as Intel even on Apple Silicon) and route `brew` through `arch -arm64`
+when the resolved prefix is `/opt/homebrew`. An Intel Homebrew at `/usr/local`
+already matches the translated process and is left alone.
+
+A Dashboard card points at the Apple Silicon build, which remains the real fix —
+Apple retires Rosetta 2 in a future macOS release.
+
+Thanks to **@luisillo26** (#158).
+
+### Window chrome, native controls and the console follow the theme
+
+Five theming gaps, found running the Linux build on Ubuntu 26.04 where the app
+was dark but everything around it was not. Four of the five also affect macOS.
+
+- **The title bar ignored the theme.** Setting `data-theme` reaches our own
+  stylesheet and nothing else; window decorations belong to the platform. The
+  app now tells the OS, which on Linux lands in GTK as
+  `gtk-application-prefer-dark-theme`.
+- **Dropdown popups rendered light on a dark page.** On Linux those are real GTK
+  widgets living outside the DOM, so no page CSS can reach them. Setting
+  `color-scheme` is the only lever — and it fixes UA scrollbars and form
+  controls on every platform at the same time.
+- **The Activity drawer's console was pinned dark in both themes**, reading as an
+  unthemed hole in a light window. It now sits one step below the surface around
+  it in each theme, mirroring how the dark console already related to dark
+  surfaces.
+- **Console line colours came from the app's palette**, which is tuned for the
+  app surface — the warning colour is documented at ~2.9:1 on light and fails
+  AA. It only ever passed because the console was always black. Light mode now
+  uses console-specific variants drawn from the already-audited accessible
+  colours. **Dark mode is unchanged.**
+- **macOS-only copy and controls appeared on Linux.** The System hint said
+  "Follows the macOS theme", and the Window vibrancy field — macOS visual-effect
+  material selection, with no Linux equivalent — was fully interactive. The hint
+  is platform-aware; the vibrancy field is hidden on Linux.
+
+### Smaller things
+
+- The Linux build workflow keeps its explanatory comments (the `ubuntu-22.04`
+  pin is a deliberate glibc floor; the updater-artifact override documents a CI
+  failure mode) while picking up clearer step names in the Actions log. Thanks
+  to **@taskinf198-afk** (#166).
+- Release publishing is now a script with preflight checks, ordered uploads and
+  on-host verification, and no machine names live in the repo.
+- `package-lock.json` version synced to match `package.json`.
