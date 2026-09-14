@@ -179,3 +179,52 @@ struct VulnsResolutionTests {
         #expect(await service.isBrewVulnsInstalled() == false)
     }
 }
+
+@Suite("Homebrew 6 findings envelope")
+struct VulnsFindingsEnvelopeTests {
+    /// Homebrew 6.0+ absorbed `brew vulns` as a built-in command and wraps the
+    /// records in an envelope rather than emitting a bare array. Before the
+    /// fix, the envelope decoded vacuously into one blank record and the
+    /// Exposure card reported "no known vulnerabilities" on a machine with 20
+    /// real findings.
+    @Test func envelopeIsUnwrapped() throws {
+        let raw = """
+        {
+          "findings": [
+            {"formula": "libheif", "version": "1.23.4",
+             "vulnerabilities": [
+               {"id": "OSV-2020-2308", "severity": "MEDIUM",
+                "summary": "Heap-buffer-overflow", "fixed_versions": []}
+             ]}
+          ],
+          "skipped_formulae": ["some-formula"]
+        }
+        """
+        let keyed = try VulnsService.parseScanOutputKeyed(raw)
+        #expect(keyed.count == 1, "findings must be unwrapped, not swallowed")
+        #expect(keyed["libheif"]?.count == 1)
+        #expect(keyed["libheif"]?.first?.id == "OSV-2020-2308")
+    }
+
+    /// Regression guard: an object that carries no formula name is not a scan
+    /// record and must never decode as one — that vacuous match is exactly what
+    /// hid the envelope's findings.
+    @Test func unknownObjectShapeDoesNotDecodeAsCleanScan() {
+        let raw = #"{"something_else": [1, 2, 3]}"#
+        #expect(throws: (any Error).self) {
+            _ = try VulnsService.parseScanOutputKeyed(raw)
+        }
+    }
+
+    /// The legacy bare-array shape from the external brew-vulns formula must
+    /// keep working — both forms are in the wild.
+    @Test func legacyBareArrayStillParses() throws {
+        let raw = """
+        [{"formula": "augeas", "version": "1.14.1",
+          "vulnerabilities": [{"id": "CVE-2024-1234", "severity": "HIGH",
+                               "summary": "x", "fixed_versions": []}]}]
+        """
+        let keyed = try VulnsService.parseScanOutputKeyed(raw)
+        #expect(keyed["augeas"]?.count == 1)
+    }
+}

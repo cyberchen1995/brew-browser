@@ -412,9 +412,32 @@ fn try_parse_records(s: &str) -> Option<Vec<RawScanResult>> {
     if let Ok(arr) = serde_json::from_str::<Vec<RawScanResult>>(s) {
         return Some(arr);
     }
+    // Homebrew 6.0+ absorbed `brew vulns` as a built-in command and wraps the
+    // records in an envelope: `{"findings": [...], "skipped_formulae": [...]}`.
+    // The old external `brew-vulns` formula emitted a bare array. Both ship in
+    // the wild, so accept either.
+    if let Ok(env) = serde_json::from_str::<FindingsEnvelope>(s) {
+        return Some(env.findings);
+    }
+    // Single bare record. MUST come last and MUST be validated: `RawScanResult`
+    // is `#[serde(default)]`, so *any* JSON object decodes into it vacuously
+    // with every field empty. That is exactly how the 6.0 envelope used to be
+    // swallowed — it produced one blank record with zero vulnerabilities, and
+    // the Exposure card cheerfully reported "no known vulnerabilities" on a
+    // machine with 20 real findings. A record with no formula name is not a
+    // record; reject it so the caller's parse-failure path can surface.
     serde_json::from_str::<RawScanResult>(s)
         .ok()
+        .filter(|one| !one.formula.is_empty())
         .map(|one| vec![one])
+}
+
+/// Homebrew 6.0+ `brew vulns --json` envelope. `skipped_formulae` (formulae
+/// whose forge OSV can't query) is deliberately ignored — it carries no
+/// finding data and its absence must not fail the parse.
+#[derive(Debug, Deserialize)]
+struct FindingsEnvelope {
+    findings: Vec<RawScanResult>,
 }
 
 /// Extract the JSON document from line-oriented CLI noise: from the first
@@ -837,6 +860,46 @@ mod tests {
     ]"#;
 
     #[test]
+    #[test]
+    fn homebrew_6_findings_envelope_is_unwrapped() {
+        // Homebrew 6.0+ built-in `brew vulns --json` wraps records in an
+        // envelope instead of emitting a bare array, and carries a sibling
+        // `skipped_formulae` key we must tolerate.
+        let raw = r#"{
+          "findings": [
+            {"formula": "libheif", "version": "1.23.4", "tag": "v1.23.4",
+             "repo_url": "https://github.com/strukturag/libheif",
+             "vulnerabilities": [
+               {"id": "OSV-2020-2308", "severity": "MEDIUM",
+                "summary": "Heap-buffer-overflow", "aliases": [], "fixed_versions": []}
+             ]}
+          ],
+          "skipped_formulae": ["some-formula"]
+        }"#;
+        let parsed = parse_scan_output(raw, "fixture").expect("envelope parses");
+        assert_eq!(parsed.len(), 1, "findings must be unwrapped, not swallowed");
+        assert_eq!(parsed[0].formula, "libheif");
+        assert_eq!(parsed[0].vulnerabilities.len(), 1);
+    }
+
+    #[test]
+    fn unknown_object_shape_is_not_swallowed_as_a_blank_record() {
+        // Regression guard. `RawScanResult` is `#[serde(default)]`, so before
+        // the envelope fix ANY object decoded vacuously into one blank record
+        // with zero vulnerabilities — the Exposure card then reported "no known
+        // vulnerabilities" on a machine with 20 real findings. An object that
+        // carries no formula name must never parse as a clean scan record.
+        let raw = r#"{"something_else": [1, 2, 3]}"#;
+        assert!(
+            try_parse_records(raw).is_none(),
+            "an unrecognised object must not masquerade as a clean scan"
+        );
+        assert!(
+            parse_scan_output(raw, "fixture").is_err(),
+            "an unrecognised JSON document must surface as a parse error"
+        );
+    }
+
     fn raw_scan_result_parses_real_brew_vulns_output() {
         let parsed = parse_scan_output(REAL_BREW_VULNS_OUTPUT, "fixture").expect("parses");
         assert_eq!(parsed.len(), 3);
