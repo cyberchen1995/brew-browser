@@ -18,9 +18,12 @@ struct AboutView: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
     }
 
-    /// The real app icon (bundled `AppIcon.icns`, loaded via `Bundle.module` —
-    /// same source as the Dock icon). Loaded once; falls back to the beer mark.
+    /// Resolve the packaged icon through macOS, with a fallback for bare SPM runs.
     private static let appIcon: NSImage? = {
+        if Bundle.main.bundleURL.pathExtension == "app",
+           Bundle.main.url(forResource: "Assets", withExtension: "car") != nil {
+            return NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
+        }
         guard let url = Bundle.module.url(forResource: "AppIcon", withExtension: "icns") else { return nil }
         return NSImage(contentsOf: url)
     }()

@@ -1,13 +1,15 @@
 import SwiftUI
 import AppKit
 
-/// Sets the Dock / ⌘-Tab icon at runtime from the bundled `AppIcon.icns`.
-/// Needed because the bare `swift build` / Xcode ⌘R binary has no `.app`
-/// Info.plist icon — only the `build-app.sh` bundle does. Loading from
-/// `Bundle.module` makes the real icon show in BOTH run paths. Call once at
-/// launch (from the executable's AppDelegate).
+/// The packaged app leaves icon appearance to macOS. Only unbundled development
+/// runs need the flat fallback from Bundle.module.
 @MainActor
 public func applyDockIcon() {
+    if Bundle.main.bundleURL.pathExtension == "app",
+       Bundle.main.object(forInfoDictionaryKey: "CFBundleIconName") != nil,
+       Bundle.main.url(forResource: "Assets", withExtension: "car") != nil {
+        return
+    }
     guard let url = Bundle.module.url(forResource: "AppIcon", withExtension: "icns"),
           let image = NSImage(contentsOf: url) else { return }
     NSApplication.shared.applicationIconImage = image
