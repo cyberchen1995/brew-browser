@@ -190,10 +190,17 @@ The manifest itself is a small JSON file served from `https://brew-browser.zerol
    ```
    Use real files with the final URL names; `gh release upload file#label` changes the asset label, not the URL filename, and the updater manifest needs the URL filename to match exactly.
 
-4. **Deploy the manifest** to the umbp host. The script will print the exact rsync command; run it yourself so the deploy step stays a deliberate action:
+4. **Publish the feeds** with `tools/release/publish-release.sh`. It copies the
+   payloads before the feeds that point at them, fixes serving modes, and verifies
+   the live feed on the host before reporting success — it refuses to publish a
+   manifest whose version doesn't match the release you named:
    ```sh
-   rsync -avz dist/updater.json michael@umacbookpro:Sites/brew-browser/updater.json
+   source ~/.config/brew-browser/deploy.env   # gitignored; see the script header
+   tools/release/publish-release.sh --tauri 0.7.0 --native 0.3.0
    ```
+   The deploy host and web root come from `BREW_BROWSER_DEPLOY_HOST` /
+   `BREW_BROWSER_WEB_ROOT` so no host names live in this repo. Add `--dry-run`
+   to see exactly what it would do first.
 
 5. **Verify the manifest is live:**
    ```sh
