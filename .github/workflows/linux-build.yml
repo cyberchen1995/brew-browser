@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       # Standard Tauri 2 Linux build dependencies. Sourced from
@@ -70,18 +70,18 @@ jobs:
             file \
             wget
 
-      - name: Install Rust stable
+      - name: Set up Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       # Cache the cargo registry + the src-tauri/target dir keyed on the
       # Linux target, so incremental CI runs skip recompiling unchanged
       # crates. workspaces points at the crate root that holds Cargo.lock.
-      - name: Rust cache
+      - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
-      - name: Setup Node 22
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -104,21 +104,21 @@ jobs:
       - name: Build Tauri app
         run: npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
-      - name: Upload .deb
+      - name: Upload .deb package
         uses: actions/upload-artifact@v4
         with:
           name: brew-browser-deb
           path: src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: error
 
-      - name: Upload .rpm
+      - name: Upload .rpm package
         uses: actions/upload-artifact@v4
         with:
           name: brew-browser-rpm
           path: src-tauri/target/release/bundle/rpm/*.rpm
           if-no-files-found: error
 
-      - name: Upload .AppImage
+      - name: Upload AppImage
         uses: actions/upload-artifact@v4
         with:
           name: brew-browser-appimage
