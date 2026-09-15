@@ -37,12 +37,22 @@ mkdir -p "$APP/Contents/MacOS"
 mkdir -p "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/BrewBrowser"
 
-# App icon — the real brew-browser icon (1024px .icns, shared with the Tauri
-# app). Gives the .app a proper Dock/Finder/⌘-Tab icon instead of the generic
-# placeholder. Referenced by CFBundleIconFile below.
+# Keep the legacy icon fallback alongside the native layered asset catalog.
 if [ -f "$HERE/AppIcon.icns" ]; then
   cp "$HERE/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 fi
+
+# Compile the approved Icon Composer document so macOS, rather than a runtime
+# NSImage override, owns light/dark/clear/tinted rendering. Fail the build if
+# compilation fails; never silently ship a stale flattened icon.
+ICON_BUILD="$HERE/.build/app-icon"
+mkdir -p "$ICON_BUILD"
+xcrun actool "$HERE/AppIcon.icon" \
+  --compile "$ICON_BUILD" --platform macosx --minimum-deployment-target 26.0 \
+  --target-device mac --app-icon AppIcon \
+  --output-partial-info-plist "$ICON_BUILD/icon-info.plist" --warnings --errors
+cp "$ICON_BUILD/Assets.car" "$APP/Contents/Resources/Assets.car"
+cp "$ICON_BUILD/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
 # SPM emits resource bundles (e.g. BrewBrowser_BrewBrowserKit.bundle) carrying
 # categories.json / enrichment.json / AppIcon.icns. `Bundle.module` resolves
